@@ -54,12 +54,12 @@ final class FnKeyMonitor {
     }
 
     private func handle(event: CGEvent) {
-        // Only react to the physical Fn/Globe key (keycode 63). Other keys
-        // (arrows, etc.) also carry the function flag, so without this guard
-        // they would falsely start/stop recording.
-        guard event.getIntegerValueField(.keyboardEventKeycode) == 63 else { return }
-
-        // .maskSecondaryFn is the Fn/Globe modifier at the CGEvent level.
+        // We only tap `.flagsChanged`, which fires solely for modifier keys
+        // (Shift/Ctrl/Opt/Cmd/Fn/CapsLock) — never for arrows or letters. Of
+        // those, only the Fn/Globe key sets `.maskSecondaryFn`, so this flag
+        // check alone uniquely identifies the Fn key. (Note: on modern
+        // MacBooks the Fn key's keycode field is unreliable — often 0 — so we
+        // must not filter on keycode here.)
         let fnNow = event.flags.contains(.maskSecondaryFn)
         if fnNow && !fnDown {
             fnDown = true
