@@ -1,0 +1,5 @@
+.build/
+Zwhisper.app/
+*.xcodeproj
+.DS_Store
+Package.resolved
