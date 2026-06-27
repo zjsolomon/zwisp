@@ -76,18 +76,46 @@ dictation always works. Change the model in `CleanupService.swift` (`model`).
 
 ## Customizing
 
-- **Model** — edit `modelName` in `Sources/Zwhisper/AppDelegate.swift`. Default is
+Tunable knobs live in one place: `Sources/ZwhisperCore/Configuration.swift`.
+
+- **Model** — `whisperModel` in `Configuration.default`. Default is
   `openai_whisper-large-v3-v20240930_turbo` (high accuracy, fast). Lighter options:
   - `distil-whisper_distil-large-v3_turbo` — smaller, English-leaning
   - `openai_whisper-small.en` — much smaller, lower accuracy
   - `openai_whisper-base.en` — tiny, fastest
+- **Cleanup model / prompt / endpoint** — the `Cleanup` struct in the same file.
 - **Hotkey** — Fn is detected in `FnKeyMonitor.swift` via the
   `.maskSecondaryFn` flag. To use a different modifier, change the flag check
   there.
 - **Paste instead of type** — `TextInjector.swift` types via synthetic Unicode
   key events. Swap for a pasteboard + ⌘V approach if you prefer.
 
+## Development
+
+The code is split into a dependency-free core library and a thin app on top,
+so the pure logic is unit-tested without pulling in WhisperKit/CoreML:
+
+```bash
+swift test           # runs the ZwhisperCore test suite (Swift Testing)
+swift build          # builds the app (compiles WhisperKit; slower)
+```
+
+CI (`.github/workflows/ci.yml`) runs both on every push and pull request.
+
 ## How it works
+
+`ZwhisperCore` (pure domain logic, no external dependencies):
+
+| File | Responsibility |
+|------|----------------|
+| `Configuration.swift` | All tunable settings in one place |
+| `MenuBarState.swift` | Menu-bar state + pure state derivation |
+| `CleanupService.swift` | Optional local LLM cleanup pass via Ollama |
+| `TextInjector.swift` | Types transcribed text into the focused app |
+| `TranscriptFormatter.swift` | Joins WhisperKit segments into text |
+| `Logger.swift` | Append-to-file logger |
+
+`Zwhisper` (the app — system-framework and WhisperKit glue):
 
 | File | Responsibility |
 |------|----------------|
@@ -96,8 +124,6 @@ dictation always works. Change the model in `CleanupService.swift` (`model`).
 | `FnKeyMonitor.swift` | Global `CGEventTap` watching the Fn modifier |
 | `AudioRecorder.swift` | `AVAudioEngine` capture, resampled to 16 kHz mono |
 | `Transcriber.swift` | WhisperKit wrapper (on-device speech-to-text) |
-| `CleanupService.swift` | Optional local LLM cleanup pass via Ollama |
-| `TextInjector.swift` | Types transcribed text into the focused app |
 
 ## Notes / limitations
 
@@ -105,3 +131,7 @@ dictation always works. Change the model in `CleanupService.swift` (`model`).
   WhisperKit also supports streaming if you want lower latency later.
 - Ad-hoc code signing means permissions are tied to this exact build;
   rebuilding may occasionally require re-granting Accessibility.
+
+## License
+
+[MIT](LICENSE) © Ziedo Solomon
