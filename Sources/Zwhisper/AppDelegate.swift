@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import ServiceManagement
 
 /// Orchestrates the whole flow and owns the menu-bar item.
@@ -9,6 +10,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let cleanup = CleanupService()
     private var transcriber: Transcriber?
     private var fnMonitor: FnKeyMonitor?
+
+    // Two independent readiness signals; the menu-bar state is derived from both.
+    private var monitorActive = false
+    private var modelReady = false
+    private var isBusy = false            // recording/transcribing in progress
+    private var retryTimer: Timer?
 
     private enum State {
         case loading      // model loading
@@ -48,59 +55,104 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let modelName = "openai_whisper-large-v3-v20240930_turbo"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        Log.write("=== launched; modelName=\(modelName) ===")
         setupMenuBar()
-        setState(.loading)
 
         // Trigger the microphone permission prompt early.
         recorder.requestPermission()
 
-        // Load the speech model off the main thread.
+        // Prompt for Accessibility (needed for the Fn tap + typing) and start
+        // listening immediately — independent of the model download/load.
+        let trusted = AXIsProcessTrustedWithOptions(
+            [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
+        Log.write("accessibility trusted at launch: \(trusted)")
+        startFnMonitor()
+        refreshState()
+
+        // Load the speech model off the main thread (separately).
         Task {
             do {
                 let t = try await Transcriber(model: modelName)
                 await MainActor.run {
                     self.transcriber = t
-                    self.startFnMonitor()
+                    self.modelReady = true
+                    Log.write("model loaded")
+                    self.refreshState()
                 }
             } catch {
-                NSLog("Zwhisper: model load failed: \(error)")
-                await MainActor.run { self.setState(.noPermission) }
+                await MainActor.run { Log.write("model load FAILED: \(error)") }
             }
         }
     }
 
     private func startFnMonitor() {
-        fnMonitor = FnKeyMonitor(
-            onPress: { [weak self] in self?.startRecording() },
-            onRelease: { [weak self] in self?.stopAndTranscribe() }
-        )
-        if fnMonitor?.start() == true {
-            setState(.idle)
-        } else {
-            // Event tap could not be created -> missing Accessibility permission.
-            setState(.noPermission)
+        // A tap created while NOT trusted is created successfully but receives no
+        // events, so gate on real trust and (re)create the tap once trusted.
+        let trusted = AXIsProcessTrusted()
+
+        if trusted && !monitorActive {
+            fnMonitor?.stop()
+            fnMonitor = FnKeyMonitor(
+                onPress: { [weak self] in self?.startRecording() },
+                onRelease: { [weak self] in self?.stopAndTranscribe() }
+            )
+            monitorActive = (fnMonitor?.start() == true)
+            Log.write("trusted=true; event tap active: \(monitorActive)")
+        } else if !trusted {
+            monitorActive = false
+        }
+
+        if monitorActive {
+            retryTimer?.invalidate()
+            retryTimer = nil
+        } else if retryTimer == nil {
+            // Not trusted yet. Poll so that granting Accessibility while the app
+            // runs takes effect without a manual relaunch.
+            retryTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+                guard let self, !self.monitorActive else { return }
+                Log.write("polling AXIsProcessTrusted=\(AXIsProcessTrusted())")
+                self.startFnMonitor()
+                self.refreshState()
+            }
         }
     }
 
     // MARK: - Recording lifecycle
 
     private func startRecording() {
-        guard transcriber != nil else { return }
+        Log.write("Fn down (modelReady=\(modelReady))")
+        guard modelReady, transcriber != nil else { return }
+        isBusy = true
         recorder.start()
         setState(.recording)
     }
 
     private func stopAndTranscribe() {
+        Log.write("Fn up")
+        guard isBusy, let transcriber else { return }
         let samples = recorder.stop()
-        guard !samples.isEmpty, let transcriber else { setState(.idle); return }
+        guard !samples.isEmpty else { isBusy = false; refreshState(); return }
         setState(.thinking)
         Task {
             let raw = await transcriber.transcribe(samples)
             let text = await cleanup.clean(raw)
             await MainActor.run {
                 if !text.isEmpty { self.injector.inject(text) }
-                self.setState(.idle)
+                self.isBusy = false
+                self.refreshState()
             }
+        }
+    }
+
+    /// Derives the resting menu-bar state from the two readiness signals.
+    private func refreshState() {
+        guard !isBusy else { return }
+        if !monitorActive {
+            setState(.noPermission)
+        } else if !modelReady {
+            setState(.loading)
+        } else {
+            setState(.idle)
         }
     }
 

@@ -10,6 +10,7 @@ final class FnKeyMonitor {
     private let onPress: () -> Void
     private let onRelease: () -> Void
     private var eventTap: CFMachPort?
+    private var runLoopSource: CFRunLoopSource?
     private var fnDown = false
 
     init(onPress: @escaping () -> Void, onRelease: @escaping () -> Void) {
@@ -48,9 +49,23 @@ final class FnKeyMonitor {
 
         eventTap = tap
         let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+        runLoopSource = source
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
         return true
+    }
+
+    /// Tears down the tap so a fresh one can be created (e.g. after the user
+    /// grants Accessibility — a tap created while untrusted never gets events).
+    func stop() {
+        if let tap = eventTap {
+            CGEvent.tapEnable(tap: tap, enable: false)
+        }
+        if let source = runLoopSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
+        }
+        eventTap = nil
+        runLoopSource = nil
     }
 
     private func handle(event: CGEvent) {
@@ -61,6 +76,8 @@ final class FnKeyMonitor {
         // MacBooks the Fn key's keycode field is unreliable — often 0 — so we
         // must not filter on keycode here.)
         let fnNow = event.flags.contains(.maskSecondaryFn)
+        let keycode = event.getIntegerValueField(.keyboardEventKeycode)
+        Log.write("flagsChanged: flags=\(event.flags.rawValue) fn=\(fnNow) keycode=\(keycode)")
         if fnNow && !fnDown {
             fnDown = true
             DispatchQueue.main.async { self.onPress() }

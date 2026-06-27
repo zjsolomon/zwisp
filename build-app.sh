@@ -18,8 +18,16 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Zwhisper"
 cp Info.plist "$APP/Contents/Info.plist"
 
-echo "==> Ad-hoc code signing…"
-codesign --force --deep --sign - "$APP"
+# Prefer the stable self-signed identity (see setup-signing.sh) so the
+# Accessibility/Microphone grants persist across rebuilds; fall back to ad-hoc.
+IDENTITY="Zwhisper Self-Signed"
+if security find-identity -v -p codesigning 2>/dev/null | grep -q "$IDENTITY"; then
+    echo "==> Code signing with \"$IDENTITY\" (stable identity)…"
+    codesign --force --deep --sign "$IDENTITY" "$APP"
+else
+    echo "==> Ad-hoc code signing (run ./setup-signing.sh once to make grants persistent)…"
+    codesign --force --deep --sign - "$APP"
+fi
 
 echo "==> Done: $(pwd)/$APP"
 echo "    Launch with:  open $APP"
