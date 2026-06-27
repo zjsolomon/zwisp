@@ -54,6 +54,11 @@ final class FnKeyMonitor {
     }
 
     private func handle(event: CGEvent) {
+        // Only react to the physical Fn/Globe key (keycode 63). Other keys
+        // (arrows, etc.) also carry the function flag, so without this guard
+        // they would falsely start/stop recording.
+        guard event.getIntegerValueField(.keyboardEventKeycode) == 63 else { return }
+
         // .maskSecondaryFn is the Fn/Globe modifier at the CGEvent level.
         let fnNow = event.flags.contains(.maskSecondaryFn)
         if fnNow && !fnDown {

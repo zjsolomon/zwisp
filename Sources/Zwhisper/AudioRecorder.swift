@@ -7,6 +7,9 @@ final class AudioRecorder {
     private var converter: AVAudioConverter?
     private var samples: [Float] = []
     private var isRunning = false
+    // Guards `samples`, which is written on the realtime audio thread and read
+    // from the main thread in stop().
+    private let lock = NSLock()
 
     private let targetFormat = AVAudioFormat(
         commonFormat: .pcmFormatFloat32,
@@ -23,7 +26,9 @@ final class AudioRecorder {
 
     func start() {
         guard !isRunning else { return }
+        lock.lock()
         samples.removeAll(keepingCapacity: true)
+        lock.unlock()
 
         let input = engine.inputNode
         let inputFormat = input.outputFormat(forBus: 0)
@@ -47,7 +52,10 @@ final class AudioRecorder {
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         isRunning = false
-        return samples
+        lock.lock()
+        let result = samples
+        lock.unlock()
+        return result
     }
 
     private func append(_ buffer: AVAudioPCMBuffer) {
@@ -76,7 +84,9 @@ final class AudioRecorder {
 
         if let channel = out.floatChannelData {
             let count = Int(out.frameLength)
+            lock.lock()
             samples.append(contentsOf: UnsafeBufferPointer(start: channel[0], count: count))
+            lock.unlock()
         }
     }
 }
