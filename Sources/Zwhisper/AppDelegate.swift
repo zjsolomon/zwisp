@@ -6,6 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private let recorder = AudioRecorder()
     private let injector = TextInjector()
+    private let cleanup = CleanupService()
     private var transcriber: Transcriber?
     private var fnMonitor: FnKeyMonitor?
 
@@ -38,9 +39,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // The model to load. Swap for "small.en" (more accurate) or "tiny.en" (faster).
-    // Multilingual variants: "base", "small", "large-v3".
-    private let modelName = "base.en"
+    // The speech model to load (downloaded once from Hugging Face, then cached).
+    // large-v3-turbo: near-large-v3 accuracy, fast on Apple Silicon — best for dictation.
+    // Lighter/faster alternatives:
+    //   "distil-whisper_distil-large-v3_turbo"  (smaller, English-leaning)
+    //   "openai_whisper-small.en"               (much smaller, lower accuracy)
+    //   "openai_whisper-base.en"                (tiny, fastest)
+    private let modelName = "openai_whisper-large-v3-v20240930_turbo"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMenuBar()
@@ -90,7 +95,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !samples.isEmpty, let transcriber else { setState(.idle); return }
         setState(.thinking)
         Task {
-            let text = await transcriber.transcribe(samples)
+            let raw = await transcriber.transcribe(samples)
+            let text = await cleanup.clean(raw)
             await MainActor.run {
                 if !text.isEmpty { self.injector.inject(text) }
                 self.setState(.idle)
@@ -110,6 +116,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "Open Microphone Settings…",
                                 action: #selector(openMicrophone), keyEquivalent: ""))
         menu.addItem(.separator())
+        let cleanupItem = NSMenuItem(title: "Clean up with AI (Ollama)",
+                                     action: #selector(toggleCleanup), keyEquivalent: "")
+        cleanupItem.state = cleanup.enabled ? .on : .off
+        menu.addItem(cleanupItem)
         let loginItem = NSMenuItem(title: "Launch at Login",
                                    action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
         loginItem.state = (SMAppService.mainApp.status == .enabled) ? .on : .off
@@ -118,6 +128,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)),
                                 keyEquivalent: "q"))
         statusItem.menu = menu
+    }
+
+    @objc private func toggleCleanup(_ sender: NSMenuItem) {
+        cleanup.enabled.toggle()
+        sender.state = cleanup.enabled ? .on : .off
     }
 
     @objc private func toggleLaunchAtLogin(_ sender: NSMenuItem) {
