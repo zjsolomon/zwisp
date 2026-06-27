@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import IOKit.hid
 import ServiceManagement
 
 /// Orchestrates the whole flow and owns the menu-bar item.
@@ -61,11 +62,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Trigger the microphone permission prompt early.
         recorder.requestPermission()
 
-        // Prompt for Accessibility (needed for the Fn tap + typing) and start
-        // listening immediately — independent of the model download/load.
+        // Two SEPARATE permissions are required:
+        //  - Input Monitoring: for the CGEventTap to RECEIVE the Fn key events.
+        //  - Accessibility:    for TYPING the transcribed text into other apps.
+        // Prompt for both up front, then start listening (independent of model).
         let trusted = AXIsProcessTrustedWithOptions(
             [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
-        Log.write("accessibility trusted at launch: \(trusted)")
+        let inputAccess = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
+        Log.write("accessibility=\(trusted) inputMonitoringRequest=\(inputAccess) inputMonitoring=\(hasInputMonitoring())")
         startFnMonitor()
         refreshState()
 
@@ -85,20 +89,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func startFnMonitor() {
-        // A tap created while NOT trusted is created successfully but receives no
-        // events, so gate on real trust and (re)create the tap once trusted.
-        let trusted = AXIsProcessTrusted()
+    private func hasInputMonitoring() -> Bool {
+        IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeGranted
+    }
 
-        if trusted && !monitorActive {
+    private func startFnMonitor() {
+        // The keyboard tap needs BOTH Input Monitoring (to receive events) and
+        // Accessibility (to type out the result). A tap created without Input
+        // Monitoring is created successfully but receives nothing, so gate on
+        // both and (re)create the tap once both are granted.
+        let inputOK = hasInputMonitoring()
+        let axOK = AXIsProcessTrusted()
+        let ready = inputOK && axOK
+
+        if ready && !monitorActive {
             fnMonitor?.stop()
             fnMonitor = FnKeyMonitor(
                 onPress: { [weak self] in self?.startRecording() },
                 onRelease: { [weak self] in self?.stopAndTranscribe() }
             )
             monitorActive = (fnMonitor?.start() == true)
-            Log.write("trusted=true; event tap active: \(monitorActive)")
-        } else if !trusted {
+            Log.write("permissions OK (input=\(inputOK) ax=\(axOK)); event tap active: \(monitorActive)")
+        } else if !ready {
             monitorActive = false
         }
 
@@ -106,11 +118,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             retryTimer?.invalidate()
             retryTimer = nil
         } else if retryTimer == nil {
-            // Not trusted yet. Poll so that granting Accessibility while the app
-            // runs takes effect without a manual relaunch.
+            // Poll so that granting the missing permission while the app runs
+            // takes effect without a manual relaunch.
             retryTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
                 guard let self, !self.monitorActive else { return }
-                Log.write("polling AXIsProcessTrusted=\(AXIsProcessTrusted())")
+                Log.write("polling: inputMonitoring=\(self.hasInputMonitoring()) accessibility=\(AXIsProcessTrusted())")
                 self.startFnMonitor()
                 self.refreshState()
             }
@@ -165,6 +177,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Open Accessibility Settings…",
                                 action: #selector(openAccessibility), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Open Input Monitoring Settings…",
+                                action: #selector(openInputMonitoring), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Open Microphone Settings…",
                                 action: #selector(openMicrophone), keyEquivalent: ""))
         menu.addItem(.separator())
@@ -264,6 +278,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func openAccessibility() {
         NSWorkspace.shared.open(URL(string:
             "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
+    }
+
+    @objc private func openInputMonitoring() {
+        NSWorkspace.shared.open(URL(string:
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")!)
     }
 
     @objc private func openMicrophone() {
