@@ -17,6 +17,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Zwhisper"
 cp Info.plist "$APP/Contents/Info.plist"
+cp Assets/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 # Prefer the stable self-signed identity (see setup-signing.sh) so the
 # Accessibility/Microphone grants persist across rebuilds; fall back to ad-hoc.
