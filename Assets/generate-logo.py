@@ -15,9 +15,10 @@ CLR = {
     '.': (79, 70, 229, 255),    # indigo tile
     ',': (67, 56, 202, 255),    # indigo tile, darker (bottom shading band)
     'w': (245, 246, 252, 255),  # mic body (near-white)
-    's': (199, 205, 234, 255),  # mic body shadow edge
-    'Z': (255, 138, 24, 255),   # amber Z
-    'z': (217, 110, 12, 255),   # amber Z shadow
+    'd': (52, 44, 148, 255),    # drop shadow on the tile (darker purple)
+    'Z': (255, 138, 24, 255),   # orange Z (main fill)
+    'H': (255, 184, 102, 255),  # orange Z highlight (top/left bevel)
+    'S': (198, 92, 10, 255),    # orange Z shadow (bottom/right bevel)
 }
 
 grid = [[' '] * N for _ in range(N)]
@@ -54,55 +55,61 @@ for x, y in rounded_rect_mask(0, 0, 31, 31, 6):
 
 BG = lambda x, y: '.' if (x + y) < 30 else ','
 
-# ---- 2. microphone body ----------------------------------------------------
-# Cradle (the U that holds the mic): drawn first so the head sits on top.
-for x, y in rounded_rect_mask(8, 11, 23, 20, 6):
-    put(x, y, 'w')
-# hollow out the inside of the cradle so only the U-ring remains
-for x, y in rounded_rect_mask(10, 9, 21, 18, 5):
-    if 0 <= y < N and 0 <= x < N and grid[y][x] == 'w':
-        put(x, y, BG(x, y))
-
-# Stem
-for y in range(20, 25):
-    put(15, y, 'w'); put(16, y, 'w')
-# Base
-for x, y in rounded_rect_mask(10, 25, 21, 28, 2):
-    put(x, y, 'w')
-
-# Mic head (capsule) — drawn last so it overlaps the cradle cleanly.
-for x, y in rounded_rect_mask(11, 4, 20, 15, 5):
-    put(x, y, 'w')
-# shadow edge on the right of the head for a touch of volume
-for y in range(4, 16):
-    for x in range(11, 21):
-        if grid[y][x] == 'w' and x == 20:
-            put(x, y, 's')
-
-# ---- 3. the Z on the head --------------------------------------------------
-Z8 = [
-    "########",
-    "########",
-    ".....###",
-    "....###.",
-    "...###..",
-    "..###...",
-    ".###....",
-    "########",
-    "########",
+# ---- 2. a big bold Z ------------------------------------------------------
+# Hand-drawn 20x22 Z bitmap: thick top/bottom bars joined by a fat diagonal.
+Zart = [
+    "####################",  # 0  top bar
+    "####################",  # 1
+    "####################",  # 2
+    "####################",  # 3
+    "####################",  # 4
+    ".............####....",  # 5  fat diagonal, top-right → bottom-left
+    "............####.....",  # 6
+    "...........####......",  # 7
+    "..........####.......",  # 8
+    ".........####........",  # 9
+    "........####.........",  # 10
+    ".......####..........",  # 11
+    "......####...........",  # 12
+    ".....####............",  # 13
+    "....####.............",  # 14
+    "...####..............",  # 15
+    "..####...............",  # 16
+    "####################",  # 17  bottom bar
+    "####################",  # 18
+    "####################",  # 19
+    "####################",  # 20
+    "####################",  # 21
 ]
-zx, zy = 12, 5  # top-left of the Z within the head
-for ry, row in enumerate(Z8):
+ZW, ZH = 20, 22
+zx, zy = (N - ZW) // 2, (N - ZH) // 2  # centre the Z on the tile
+
+mask = set()
+for ry, row in enumerate(Zart):
     for rx, ch in enumerate(row):
         if ch == '#':
-            put(zx + rx, zy + ry, 'Z')
-# 1px drop shadow under the Z for legibility on white
-for ry, row in enumerate(Z8):
-    for rx, ch in enumerate(row):
-        if ch == '#':
-            x, y = zx + rx, zy + ry + 1
-            if 0 <= y < N and grid[y][x] == 'w':
-                put(x, y, 'z')
+            mask.add((zx + rx, zy + ry))
+
+# Drop shadow: the Z shape offset down-right, painted darker purple behind it.
+for (x, y) in mask:
+    for ox, oy in ((2, 2), (2, 1), (1, 2)):
+        p = (x + ox, y + oy)
+        if p not in mask and 0 <= p[0] < N and 0 <= p[1] < N \
+                and grid[p[1]][p[0]] in ('.', ','):
+            put(p[0], p[1], 'd')
+
+# Bevel shading: top/left rim = highlight, bottom/right rim = shadow.
+for (x, y) in mask:
+    up = (x, y - 1) not in mask
+    left = (x - 1, y) not in mask
+    down = (x, y + 1) not in mask
+    right = (x + 1, y) not in mask
+    if down or right:
+        put(x, y, 'S')
+    elif up or left:
+        put(x, y, 'H')
+    else:
+        put(x, y, 'Z')
 
 # ---------------------------------------------------------------------------
 def to_rgba(scale):
