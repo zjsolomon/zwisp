@@ -20,7 +20,7 @@ public enum MenuBarState: Equatable {
     public var label: String {
         switch self {
         case .loading:      return "Loading model…"
-        case .idle:         return "Ready — hold Fn to talk"
+        case .idle:         return "Ready — hold your hotkey to talk"
         case .recording:    return "Recording…"
         case .thinking:     return "Transcribing…"
         case .noPermission: return "Needs Accessibility permission"
