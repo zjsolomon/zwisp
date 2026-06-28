@@ -4,3 +4,6 @@ Zwhisper.app/
 .DS_Store
 # Package.resolved is intentionally committed: this is an app, so pinning exact
 # dependency versions gives everyone reproducible builds.
+
+# Claude Code worktrees / local session state
+.claude/
