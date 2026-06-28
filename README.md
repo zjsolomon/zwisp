@@ -6,17 +6,18 @@
 
 **Private, on-device dictation for macOS.** Hold your push-to-talk key
 (Right ⌘ by default), talk, release — your speech is transcribed locally and
-typed straight into whatever app is focused. No cloud, no account, no
-subscription, nothing leaves your Mac.
+typed into whatever app is focused. Everything runs on your Mac; nothing is sent
+to a server, and no account is required. The only network access is a one-time
+download of the speech model.
 
 [![CI](https://github.com/zjsolomon/Zwhisper/actions/workflows/ci.yml/badge.svg)](https://github.com/zjsolomon/Zwhisper/actions/workflows/ci.yml)
 ![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-blue)
 ![Swift](https://img.shields.io/badge/swift-5.9%2B-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-Think of it as an open-source, local-first take on tools like Wispr Flow: the
-same push-to-talk-anywhere feel, but the audio never leaves your machine and
-there's no bill.
+Zwhisper is an open-source, local-first alternative to hosted dictation tools
+such as Wispr Flow. It provides the same hold-a-key-anywhere workflow, but
+transcription runs on-device instead of in the cloud.
 
 ```
 key held  ──►  record mic (16 kHz)  ──►  release  ──►  WhisperKit (on-device)  ──►  types text
@@ -33,12 +34,11 @@ key held  ──►  record mic (16 kHz)  ──►  release  ──►  Whisper
 - **Push-to-talk** — hold your key, speak, release. No wake word, no window to
   click. Right ⌘ by default, and you can set your own — even several at once.
 - **Optional AI cleanup [Beta]** — pipe the raw transcript through a local LLM
-  ([Ollama](https://ollama.com)) to strip filler words and fix punctuation,
-  still 100% offline.
-- **Lives in the menu bar** — no Dock icon, no windows. Launches at login if you
-  want it to.
-- **Tiny and readable** — a small, dependency-light Swift codebase that's easy to
-  audit and hack on.
+  ([Ollama](https://ollama.com)) to remove filler words and fix punctuation,
+  still fully offline.
+- **Lives in the menu bar** — no Dock icon and no windows. Can launch at login.
+- **Small codebase** — a compact, dependency-light Swift project that is
+  straightforward to read and audit.
 
 ## Requirements
 
@@ -118,12 +118,13 @@ modifiers are distinct, so you can bind Right ⌘ without affecting Left ⌘.
 > like. It's off-by-default-safe: if anything goes wrong or Ollama isn't
 > running, Zwhisper falls back to the raw transcript. Toggle it off any time.
 
-Raw speech-to-text is literal — it keeps the "um"s, false starts, and missing
-punctuation. Zwhisper can pipe each transcript through a local LLM that rewrites
-it into clean written text. This is the polish that makes commercial dictation
-tools feel magic, and here it runs entirely on your machine.
+Raw speech-to-text is literal: it keeps filler words and false starts, and often
+lacks punctuation. Zwhisper can optionally pass each transcript through a local
+LLM that rewrites it into cleaner written text. This runs entirely on your
+machine.
 
-It uses [Ollama](https://ollama.com) — no API key, nothing leaves your Mac:
+It uses [Ollama](https://ollama.com), which needs no API key and keeps everything
+local:
 
 ```bash
 brew install ollama        # or download from ollama.com
@@ -211,7 +212,7 @@ by CI.
 
 - [WhisperKit](https://github.com/argmaxinc/WhisperKit) by Argmax for on-device
   Whisper inference.
-- [Ollama](https://ollama.com) for painless local LLMs.
+- [Ollama](https://ollama.com) for running local LLMs.
 
 ## License
 
