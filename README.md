@@ -1,8 +1,9 @@
 # Zwhisper
 
-**Private, on-device dictation for macOS.** Hold the `Fn` (🌐) key, talk, release —
-your speech is transcribed locally and typed straight into whatever app is
-focused. No cloud, no account, no subscription, nothing leaves your Mac.
+**Private, on-device dictation for macOS.** Hold your push-to-talk key
+(Right ⌘ by default), talk, release — your speech is transcribed locally and
+typed straight into whatever app is focused. No cloud, no account, no
+subscription, nothing leaves your Mac.
 
 [![CI](https://github.com/zjsolomon/Zwhisper/actions/workflows/ci.yml/badge.svg)](https://github.com/zjsolomon/Zwhisper/actions/workflows/ci.yml)
 ![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-blue)
@@ -14,7 +15,7 @@ same push-to-talk-anywhere feel, but the audio never leaves your machine and
 there's no bill.
 
 ```
-Fn held  ──►  record mic (16 kHz)  ──►  release  ──►  WhisperKit (on-device)  ──►  types text
+key held  ──►  record mic (16 kHz)  ──►  release  ──►  WhisperKit (on-device)  ──►  types text
             menu bar:  🎙️ idle   🔴 recording   💭 thinking
 ```
 
@@ -25,7 +26,8 @@ Fn held  ──►  record mic (16 kHz)  ──►  release  ──►  WhisperK
   touches a server.
 - **Works everywhere** — types into any app that accepts keyboard input. It uses
   synthetic key events, so it never touches or clobbers your clipboard.
-- **Push-to-talk** — hold `Fn`, speak, release. No wake word, no window to click.
+- **Push-to-talk** — hold your key, speak, release. No wake word, no window to
+  click. Right ⌘ by default, and you can set your own — even several at once.
 - **Optional AI cleanup** — pipe the raw transcript through a local LLM
   ([Ollama](https://ollama.com)) to strip filler words and fix punctuation,
   still 100% offline.
@@ -71,9 +73,9 @@ separate privacy permissions. Grant these once:
    Monitoring** → enable **Zwhisper**. Required to detect the `Fn` key globally.
 3. **Accessibility** — System Settings → Privacy & Security → **Accessibility** →
    enable **Zwhisper**. Required to type the transcribed text into other apps.
-4. **Free up the `Fn` key (recommended)** — System Settings → Keyboard →
+4. **Only if you pick `Fn` as a hotkey** — System Settings → Keyboard →
    "Press 🌐 key to" → **Do Nothing**, so `Fn` doesn't also open the emoji
-   picker or switch input source.
+   picker or switch input source. (Not needed for the default Right ⌘.)
 
 The menu-bar icon turns orange until the hotkey permissions are granted. Zwhisper
 watches for the grant and starts working within a couple of seconds — no relaunch
@@ -86,9 +88,23 @@ afterwards it runs fully offline.
 
 ## Usage
 
-- Hold **`Fn`**, speak, then release. The text is typed at your cursor.
-- Click the menu-bar icon for permission shortcuts, the AI-cleanup toggle,
-  Launch at Login, and Quit.
+- Hold your **push-to-talk key** (Right ⌘ by default), speak, then release. The
+  text is typed at your cursor.
+- Click the menu-bar icon for hotkey settings, permission shortcuts, the
+  AI-cleanup toggle, Launch at Login, and Quit.
+
+### Changing hotkeys
+
+Click the menu-bar icon → **Hotkeys**:
+
+- **Add** — choose **Add Hotkey…**, then press the modifier key you want. It's
+  registered instantly.
+- **Remove** — click any listed key to remove it.
+- **Multiple keys** — add as many as you like; holding *any* of them records.
+
+Only modifier keys (⌘ ⌥ ⌃ ⇧ and Fn 🌐) can be hotkeys — you hold one to talk, and
+modifiers don't type characters or auto-repeat while held. Left and right
+modifiers are distinct, so you can bind Right ⌘ without affecting Left ⌘.
 
 ## Optional: AI cleanup with Ollama
 
@@ -121,8 +137,9 @@ All tunable settings live in one file:
   - `openai_whisper-base.en` — tiny and fastest
 - **AI cleanup** — the `Cleanup` struct sets the Ollama model, prompt, endpoint,
   and timeout.
-- **Hotkey** — `Fn` is detected in `FnKeyMonitor.swift` via the `.maskSecondaryFn`
-  flag; change the flag check to use a different modifier.
+- **Hotkeys** — configured from the menu bar (see
+  [Changing hotkeys](#changing-hotkeys)); the default is defined by
+  `HotkeyStore.defaultHotkeys`.
 - **Paste instead of type** — `TextInjector.swift` types via synthetic Unicode
   key events. Swap it for a pasteboard + ⌘V approach if you prefer.
 
@@ -147,6 +164,8 @@ release build on every push and pull request.
 |------|----------------|
 | `Configuration.swift` | All tunable settings in one place |
 | `MenuBarState.swift` | Menu-bar state + pure state derivation |
+| `Hotkey.swift` | The push-to-talk modifier keys and their flag masks |
+| `HotkeyStore.swift` | Persists the user's hotkeys (add/remove) |
 | `CleanupService.swift` | Optional local LLM cleanup pass via Ollama |
 | `TextInjector.swift` | Types transcribed text into the focused app |
 | `TranscriptFormatter.swift` | Joins WhisperKit segments into text |
@@ -158,7 +177,8 @@ release build on every push and pull request.
 |------|----------------|
 | `main.swift` | App entry, runs as a menu-bar (accessory) app |
 | `AppDelegate.swift` | Wires everything together, owns the status item |
-| `FnKeyMonitor.swift` | Global `CGEventTap` watching the `Fn` modifier |
+| `HotkeyMonitor.swift` | Global `CGEventTap` watching the configured modifiers |
+| `HotkeyCapturePanel.swift` | "Press a key" panel for adding a hotkey |
 | `AudioRecorder.swift` | `AVAudioEngine` capture, resampled to 16 kHz mono |
 | `Transcriber.swift` | WhisperKit wrapper (on-device speech-to-text) |
 
