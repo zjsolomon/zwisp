@@ -28,7 +28,7 @@ key held  ──►  record mic (16 kHz)  ──►  release  ──►  Whisper
   synthetic key events, so it never touches or clobbers your clipboard.
 - **Push-to-talk** — hold your key, speak, release. No wake word, no window to
   click. Right ⌘ by default, and you can set your own — even several at once.
-- **Optional AI cleanup** — pipe the raw transcript through a local LLM
+- **Optional AI cleanup [Beta]** — pipe the raw transcript through a local LLM
   ([Ollama](https://ollama.com)) to strip filler words and fix punctuation,
   still 100% offline.
 - **Lives in the menu bar** — no Dock icon, no windows. Launches at login if you
@@ -106,7 +106,13 @@ Only modifier keys (⌘ ⌥ ⌃ ⇧ and Fn 🌐) can be hotkeys — you hold one
 modifiers don't type characters or auto-repeat while held. Left and right
 modifiers are distinct, so you can bind Right ⌘ without affecting Left ⌘.
 
-## Optional: AI cleanup with Ollama
+## Optional: AI cleanup with Ollama [Beta]
+
+> **Beta.** This pass is experimental. Small local models don't always follow
+> the cleanup instructions perfectly — they can occasionally add a preamble
+> (e.g. "Here is the rewritten dictation:") or otherwise rewrite more than you'd
+> like. It's off-by-default-safe: if anything goes wrong or Ollama isn't
+> running, Zwhisper falls back to the raw transcript. Toggle it off any time.
 
 Raw speech-to-text is literal — it keeps the "um"s, false starts, and missing
 punctuation. Zwhisper can pipe each transcript through a local LLM that rewrites
@@ -121,8 +127,8 @@ ollama serve               # start the local server (also runs as a login servic
 ollama pull llama3.2:3b    # ~2 GB, one time
 ```
 
-Then leave **"Clean up with AI (Ollama)"** enabled in the menu (it's on by
-default). If Ollama isn't running, Zwhisper silently falls back to the raw
+Then leave **"Clean up with AI (Ollama) [Beta]"** enabled in the menu (it's on
+by default). If Ollama isn't running, Zwhisper silently falls back to the raw
 transcript, so dictation always works either way.
 
 ## Configuration
