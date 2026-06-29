@@ -1,0 +1,82 @@
+import AVFoundation
+
+/// Captures microphone audio and resamples it to the 16 kHz mono Float32
+/// format WhisperKit expects.
+final class AudioRecorder {
+    private let engine = AVAudioEngine()
+    private var converter: AVAudioConverter?
+    private var samples: [Float] = []
+    private var isRunning = false
+
+    private let targetFormat = AVAudioFormat(
+        commonFormat: .pcmFormatFloat32,
+        sampleRate: 16_000,
+        channels: 1,
+        interleaved: false
+    )!
+
+    func requestPermission() {
+        AVCaptureDevice.requestAccess(for: .audio) { granted in
+            if !granted { NSLog("Zwhisper: microphone permission denied") }
+        }
+    }
+
+    func start() {
+        guard !isRunning else { return }
+        samples.removeAll(keepingCapacity: true)
+
+        let input = engine.inputNode
+        let inputFormat = input.outputFormat(forBus: 0)
+        converter = AVAudioConverter(from: inputFormat, to: targetFormat)
+
+        input.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
+            self?.append(buffer)
+        }
+
+        do {
+            try engine.start()
+            isRunning = true
+        } catch {
+            NSLog("Zwhisper: audio engine failed to start: \(error)")
+        }
+    }
+
+    /// Stops capture and returns the recorded samples at 16 kHz mono.
+    func stop() -> [Float] {
+        guard isRunning else { return [] }
+        engine.inputNode.removeTap(onBus: 0)
+        engine.stop()
+        isRunning = false
+        return samples
+    }
+
+    private func append(_ buffer: AVAudioPCMBuffer) {
+        guard let converter else { return }
+
+        let ratio = targetFormat.sampleRate / buffer.format.sampleRate
+        let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 1024
+        guard let out = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: capacity) else { return }
+
+        var fedInput = false
+        var error: NSError?
+        converter.convert(to: out, error: &error) { _, status in
+            if fedInput {
+                status.pointee = .noDataNow
+                return nil
+            }
+            fedInput = true
+            status.pointee = .haveData
+            return buffer
+        }
+
+        if let error {
+            NSLog("Zwhisper: audio convert error: \(error)")
+            return
+        }
+
+        if let channel = out.floatChannelData {
+            let count = Int(out.frameLength)
+            samples.append(contentsOf: UnsafeBufferPointer(start: channel[0], count: count))
+        }
+    }
+}
