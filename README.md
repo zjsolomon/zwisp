@@ -54,13 +54,33 @@ menu-bar, and launch-at-login behavior work best from the installed `.app`.)
 - Hold **Fn**, speak, release. The text is typed at your cursor.
 - Click the menu-bar icon for settings shortcuts and Quit.
 
+## AI cleanup (optional, fully local)
+
+Raw speech-to-text is literal — it keeps "um"s, false starts, and missing
+punctuation. Zwhisper can pipe the transcript through a local LLM that rewrites
+it into clean written text (this is the main thing that makes commercial tools
+like Wispr Flow feel polished).
+
+This runs **locally and offline** via [Ollama](https://ollama.com) — no API key,
+nothing leaves your machine. Setup:
+
+```bash
+brew install ollama        # or download from ollama.com
+ollama serve               # starts the local server (also runs as a login service)
+ollama pull llama3.2:3b    # ~2GB, one time
+```
+
+Then enable **"Clean up with AI (Ollama)"** in the menu (on by default). If
+Ollama isn't running, Zwhisper silently falls back to the raw transcript, so
+dictation always works. Change the model in `CleanupService.swift` (`model`).
+
 ## Customizing
 
-- **Model** — edit `modelName` in `Sources/Zwhisper/AppDelegate.swift`:
-  - `tiny.en` — fastest, least accurate
-  - `base.en` — default, good balance
-  - `small.en` — slower, more accurate
-  - `base` / `small` / `large-v3` — multilingual
+- **Model** — edit `modelName` in `Sources/Zwhisper/AppDelegate.swift`. Default is
+  `openai_whisper-large-v3-v20240930_turbo` (high accuracy, fast). Lighter options:
+  - `distil-whisper_distil-large-v3_turbo` — smaller, English-leaning
+  - `openai_whisper-small.en` — much smaller, lower accuracy
+  - `openai_whisper-base.en` — tiny, fastest
 - **Hotkey** — Fn is detected in `FnKeyMonitor.swift` via the
   `.maskSecondaryFn` flag. To use a different modifier, change the flag check
   there.
@@ -76,6 +96,7 @@ menu-bar, and launch-at-login behavior work best from the installed `.app`.)
 | `FnKeyMonitor.swift` | Global `CGEventTap` watching the Fn modifier |
 | `AudioRecorder.swift` | `AVAudioEngine` capture, resampled to 16 kHz mono |
 | `Transcriber.swift` | WhisperKit wrapper (on-device speech-to-text) |
+| `CleanupService.swift` | Optional local LLM cleanup pass via Ollama |
 | `TextInjector.swift` | Types transcribed text into the focused app |
 
 ## Notes / limitations

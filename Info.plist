@@ -24,5 +24,11 @@
     <!-- Required so macOS can prompt for microphone access. -->
     <key>NSMicrophoneUsageDescription</key>
     <string>Zwhisper records your voice while you hold the Fn key and transcribes it on-device.</string>
+    <!-- Allow the local HTTP call to the Ollama cleanup server on localhost. -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+    </dict>
 </dict>
 </plist>
