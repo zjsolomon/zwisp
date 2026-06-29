@@ -32,17 +32,23 @@ final class AudioRecorder {
 
         let input = engine.inputNode
         let inputFormat = input.outputFormat(forBus: 0)
+        Log.write("audio start: input sr=\(inputFormat.sampleRate) ch=\(inputFormat.channelCount)")
         converter = AVAudioConverter(from: inputFormat, to: targetFormat)
+        if converter == nil {
+            Log.write("AVAudioConverter is NIL — bad input format (mic permission?)")
+        }
 
         input.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
             self?.append(buffer)
         }
 
         do {
+            engine.prepare()
             try engine.start()
             isRunning = true
+            Log.write("audio engine started")
         } catch {
-            NSLog("Zwhisper: audio engine failed to start: \(error)")
+            Log.write("audio engine FAILED to start: \(error)")
         }
     }
 

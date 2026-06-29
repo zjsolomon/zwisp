@@ -141,15 +141,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func stopAndTranscribe() {
         Log.write("Fn up")
-        guard isBusy, let transcriber else { return }
+        guard isBusy, let transcriber else { Log.write("(not busy; ignoring)"); return }
         let samples = recorder.stop()
-        guard !samples.isEmpty else { isBusy = false; refreshState(); return }
+        let seconds = Double(samples.count) / 16_000.0
+        Log.write("captured \(samples.count) samples (\(String(format: "%.2f", seconds))s)")
+        guard samples.count > 1_600 else {   // < ~0.1s = almost certainly a stray tap
+            Log.write("too short; skipping")
+            isBusy = false
+            refreshState()
+            return
+        }
         setState(.thinking)
         Task {
             let raw = await transcriber.transcribe(samples)
+            Log.write("raw transcript: '\(raw)'")
             let text = await cleanup.clean(raw)
+            Log.write("final text: '\(text)'")
             await MainActor.run {
-                if !text.isEmpty { self.injector.inject(text) }
+                if !text.isEmpty {
+                    self.injector.inject(text)
+                    Log.write("injected \(text.count) chars")
+                } else {
+                    Log.write("empty result; nothing injected")
+                }
                 self.isBusy = false
                 self.refreshState()
             }
