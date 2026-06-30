@@ -21,9 +21,11 @@ cp Info.plist "$APP/Contents/Info.plist"
 # Prefer the stable self-signed identity (see setup-signing.sh) so the
 # Accessibility/Microphone grants persist across rebuilds; fall back to ad-hoc.
 IDENTITY="Zwhisper Self-Signed"
+SIGN_KC="$HOME/Library/Keychains/zwhisper-codesign.keychain-db"
 if security find-identity -v -p codesigning 2>/dev/null | grep -q "$IDENTITY"; then
+    [ -f "$SIGN_KC" ] && security unlock-keychain -p zwhisper "$SIGN_KC" 2>/dev/null || true
     echo "==> Code signing with \"$IDENTITY\" (stable identity)…"
-    codesign --force --deep --sign "$IDENTITY" "$APP"
+    codesign --force --deep --keychain "$SIGN_KC" --sign "$IDENTITY" "$APP"
 else
     echo "==> Ad-hoc code signing (run ./setup-signing.sh once to make grants persistent)…"
     codesign --force --deep --sign - "$APP"

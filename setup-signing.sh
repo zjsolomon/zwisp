@@ -11,7 +11,9 @@ KC="$HOME/Library/Keychains/zwhisper-codesign.keychain-db"
 KCPASS="zwhisper"
 CN="Zwhisper Self-Signed"
 
-if security find-identity -v -p codesigning 2>/dev/null | grep -q "$CN"; then
+# Consider it done only if the identity is present AND valid (no trust error
+# annotation like CSSMERR_TP_NOT_TRUSTED on its line).
+if security find-identity -v -p codesigning 2>/dev/null | grep "$CN" | grep -qv "("; then
   echo "Signing identity \"$CN\" already set up and trusted. Nothing to do."
   exit 0
 fi
@@ -28,6 +30,7 @@ TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 openssl req -x509 -newkey rsa:2048 -keyout "$TMP/k.pem" -out "$TMP/c.pem" \
   -days 3650 -nodes -subj "/CN=$CN" \
+  -addext "keyUsage=critical,digitalSignature" \
   -addext "extendedKeyUsage=critical,codeSigning" \
   -addext "basicConstraints=critical,CA:false"
 # -legacy so the macOS Security framework can import the PKCS12.
@@ -36,12 +39,20 @@ openssl pkcs12 -export -legacy -inkey "$TMP/k.pem" -in "$TMP/c.pem" \
 security import "$TMP/c.p12" -k "$KC" -P "$KCPASS" -A -T /usr/bin/codesign
 security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KCPASS" "$KC" >/dev/null
 
-echo "==> Trusting the certificate for code signing (you may be prompted)…"
-security add-trusted-cert -r trustRoot -p codeSign -k "$KC" "$TMP/c.pem"
+echo "==> Trusting the certificate for code signing (enter your password when sudo asks)…"
+# Admin-domain trust (System keychain) is reliably honored by codesign;
+# user-domain trust is not. This is why we use sudo here.
+sudo security add-trusted-cert -d -r trustRoot -p codeSign \
+  -k /Library/Keychains/System.keychain "$TMP/c.pem"
 
-echo "==> Done. Verifying:"
-security find-identity -v -p codesigning | grep "$CN" || {
-  echo "WARNING: identity still not valid; falling back to ad-hoc on next build."; exit 1; }
+echo "==> Verifying trust…"
+if security find-identity -v -p codesigning | grep "$CN" | grep -qv "("; then
+  security find-identity -v -p codesigning | grep "$CN"
+  echo "Success: \"$CN\" is now trusted for code signing."
+else
+  echo "WARNING: identity still NOT trusted (was the password prompt cancelled?)."
+  exit 1
+fi
 
 echo ""
 echo "Now run ./install.sh again, then grant Accessibility once more — it will"
