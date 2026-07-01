@@ -1,4 +1,5 @@
 import AppKit
+import ZwhisperCore
 
 /// Watches the global keyboard for the Fn (🌐) key being pressed and released,
 /// using a passive CGEventTap on `.flagsChanged`. Requires Accessibility permission.

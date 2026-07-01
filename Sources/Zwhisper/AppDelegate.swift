@@ -2,13 +2,15 @@ import AppKit
 import ApplicationServices
 import IOKit.hid
 import ServiceManagement
+import ZwhisperCore
 
 /// Orchestrates the whole flow and owns the menu-bar item.
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private let config = Configuration.default
     private var statusItem: NSStatusItem!
-    private let recorder = AudioRecorder()
-    private let injector = TextInjector()
-    private let cleanup = CleanupService()
+    private lazy var recorder = AudioRecorder(config: config.audio)
+    private lazy var injector = TextInjector(config: config.injection)
+    private lazy var cleanup = CleanupService(config: config.cleanup)
     private var transcriber: Transcriber?
     private var fnMonitor: FnKeyMonitor?
 
@@ -18,45 +20,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var isBusy = false            // recording/transcribing in progress
     private var retryTimer: Timer?
 
-    private enum State {
-        case loading      // model loading
-        case idle         // ready, waiting for Fn
-        case recording    // Fn held, capturing audio
-        case thinking     // transcribing
-        case noPermission // accessibility not granted
-
-        var label: String {
-            switch self {
-            case .loading:      return "Loading model…"
-            case .idle:         return "Ready — hold Fn to talk"
-            case .recording:    return "Recording…"
-            case .thinking:     return "Transcribing…"
-            case .noPermission: return "Needs Accessibility permission"
-            }
-        }
-
-        /// nil = template image (auto black/white to match the menu bar).
-        var tint: NSColor? {
-            switch self {
-            case .idle:         return nil
-            case .loading:      return .secondaryLabelColor
-            case .recording:    return .systemRed
-            case .thinking:     return .systemBlue
-            case .noPermission: return .systemOrange
-            }
-        }
-    }
-
-    // The speech model to load (downloaded once from Hugging Face, then cached).
-    // large-v3-turbo: near-large-v3 accuracy, fast on Apple Silicon — best for dictation.
-    // Lighter/faster alternatives:
-    //   "distil-whisper_distil-large-v3_turbo"  (smaller, English-leaning)
-    //   "openai_whisper-small.en"               (much smaller, lower accuracy)
-    //   "openai_whisper-base.en"                (tiny, fastest)
-    private let modelName = "openai_whisper-large-v3-v20240930_turbo"
-
     func applicationDidFinishLaunching(_ notification: Notification) {
-        Log.write("=== launched; modelName=\(modelName) ===")
+        Log.write("=== launched; modelName=\(config.whisperModel) ===")
         setupMenuBar()
 
         // Trigger the microphone permission prompt early.
@@ -76,7 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Load the speech model off the main thread (separately).
         Task {
             do {
-                let t = try await Transcriber(model: modelName)
+                let t = try await Transcriber(model: config.whisperModel)
                 await MainActor.run {
                     self.transcriber = t
                     self.modelReady = true
@@ -143,9 +108,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Log.write("Fn up")
         guard isBusy, let transcriber else { Log.write("(not busy; ignoring)"); return }
         let samples = recorder.stop()
-        let seconds = Double(samples.count) / 16_000.0
+        let seconds = Double(samples.count) / config.audio.sampleRate
         Log.write("captured \(samples.count) samples (\(String(format: "%.2f", seconds))s)")
-        guard samples.count > 1_600 else {   // < ~0.1s = almost certainly a stray tap
+        guard samples.count > config.audio.minimumSampleCount else {   // stray tap
             Log.write("too short; skipping")
             isBusy = false
             refreshState()
@@ -173,13 +138,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Derives the resting menu-bar state from the two readiness signals.
     private func refreshState() {
         guard !isBusy else { return }
-        if !monitorActive {
-            setState(.noPermission)
-        } else if !modelReady {
-            setState(.loading)
-        } else {
-            setState(.idle)
-        }
+        setState(.resting(monitorActive: monitorActive, modelReady: modelReady))
     }
 
     // MARK: - Menu bar
@@ -233,7 +192,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func setState(_ state: State) {
+    private func setState(_ state: MenuBarState) {
         let template = (state.tint == nil)
         let image = Self.makeIcon(tint: state.tint ?? .labelColor, template: template)
         statusItem.button?.image = image

@@ -1,5 +1,6 @@
 import Foundation
 import WhisperKit
+import ZwhisperCore
 
 /// Thin wrapper around WhisperKit. The model is downloaded from Hugging Face on
 /// first use (needs internet once), then cached locally and runs fully offline.
@@ -15,10 +16,7 @@ final class Transcriber {
         guard !samples.isEmpty else { return "" }
         do {
             let results = try await whisperKit.transcribe(audioArray: samples)
-            return results
-                .map { $0.text }
-                .joined(separator: " ")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return TranscriptFormatter.join(results.map { $0.text })
         } catch {
             NSLog("Zwhisper: transcription error: \(error)")
             return ""
