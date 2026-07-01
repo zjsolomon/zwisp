@@ -169,7 +169,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "Open Microphone Settings…",
                                 action: #selector(openMicrophone), keyEquivalent: ""))
         menu.addItem(.separator())
-        let cleanupItem = NSMenuItem(title: "Clean up with AI (Ollama)",
+        let cleanupItem = NSMenuItem(title: "Clean up with AI (Ollama) [Beta]",
                                      action: #selector(toggleCleanup), keyEquivalent: "")
         cleanupItem.state = cleanup.enabled ? .on : .off
         menu.addItem(cleanupItem)
