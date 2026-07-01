@@ -1,7 +1,8 @@
 import AppKit
 
-// Zwhisper: hold the Fn (🌐) key, talk, and the transcribed text is typed
-// into whatever app is focused. Transcription runs fully on-device via WhisperKit.
+// Zwhisper: hold your push-to-talk key (Right ⌘ by default), talk, and the
+// transcribed text is typed into whatever app is focused. Transcription runs
+// fully on-device via WhisperKit.
 
 let app = NSApplication.shared
 let delegate = AppDelegate()

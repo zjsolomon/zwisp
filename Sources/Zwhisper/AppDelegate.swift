@@ -12,7 +12,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var injector = TextInjector(config: config.injection)
     private lazy var cleanup = CleanupService(config: config.cleanup)
     private var transcriber: Transcriber?
-    private var fnMonitor: FnKeyMonitor?
+    private var hotkeyMonitor: HotkeyMonitor?
+
+    private let hotkeyStore = HotkeyStore()
+    private let capturePanel = HotkeyCapturePanel()
+    private let hotkeysMenu = NSMenu(title: "Hotkeys")
 
     // Two independent readiness signals; the menu-bar state is derived from both.
     private var monitorActive = false
@@ -28,14 +32,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         recorder.requestPermission()
 
         // Two SEPARATE permissions are required:
-        //  - Input Monitoring: for the CGEventTap to RECEIVE the Fn key events.
+        //  - Input Monitoring: for the CGEventTap to RECEIVE the hotkey events.
         //  - Accessibility:    for TYPING the transcribed text into other apps.
         // Prompt for both up front, then start listening (independent of model).
         let trusted = AXIsProcessTrustedWithOptions(
             [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
         let inputAccess = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
         Log.write("accessibility=\(trusted) inputMonitoringRequest=\(inputAccess) inputMonitoring=\(hasInputMonitoring())")
-        startFnMonitor()
+        Log.write("hotkeys: \(hotkeyStore.hotkeys.map(\.name).joined(separator: ", "))")
+        startHotkeyMonitor()
         refreshState()
 
         // Load the speech model off the main thread (separately).
@@ -58,7 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeGranted
     }
 
-    private func startFnMonitor() {
+    private func startHotkeyMonitor() {
         // The keyboard tap needs BOTH Input Monitoring (to receive events) and
         // Accessibility (to type out the result). A tap created without Input
         // Monitoring is created successfully but receives nothing, so gate on
@@ -68,12 +73,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let ready = inputOK && axOK
 
         if ready && !monitorActive {
-            fnMonitor?.stop()
-            fnMonitor = FnKeyMonitor(
+            hotkeyMonitor?.stop()
+            hotkeyMonitor = HotkeyMonitor(
+                hotkeys: hotkeyStore.hotkeys,
                 onPress: { [weak self] in self?.startRecording() },
                 onRelease: { [weak self] in self?.stopAndTranscribe() }
             )
-            monitorActive = (fnMonitor?.start() == true)
+            monitorActive = (hotkeyMonitor?.start() == true)
             Log.write("permissions OK (input=\(inputOK) ax=\(axOK)); event tap active: \(monitorActive)")
         } else if !ready {
             monitorActive = false
@@ -88,7 +94,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             retryTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
                 guard let self, !self.monitorActive else { return }
                 Log.write("polling: inputMonitoring=\(self.hasInputMonitoring()) accessibility=\(AXIsProcessTrusted())")
-                self.startFnMonitor()
+                self.startHotkeyMonitor()
                 self.refreshState()
             }
         }
@@ -97,7 +103,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Recording lifecycle
 
     private func startRecording() {
-        Log.write("Fn down (modelReady=\(modelReady))")
+        Log.write("hotkey down (modelReady=\(modelReady))")
         guard modelReady, transcriber != nil else { return }
         isBusy = true
         recorder.start()
@@ -105,7 +111,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func stopAndTranscribe() {
-        Log.write("Fn up")
+        Log.write("hotkey up")
         guard isBusy, let transcriber else { Log.write("(not busy; ignoring)"); return }
         let samples = recorder.stop()
         let seconds = Double(samples.count) / config.audio.sampleRate
@@ -148,6 +154,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "Zwhisper", action: nil, keyEquivalent: ""))
         menu.addItem(.separator())
+
+        // Hotkeys submenu — rebuilt each time it opens (see menuNeedsUpdate).
+        hotkeysMenu.delegate = self
+        let hotkeysItem = NSMenuItem(title: "Hotkeys", action: nil, keyEquivalent: "")
+        hotkeysItem.submenu = hotkeysMenu
+        menu.addItem(hotkeysItem)
+        menu.addItem(.separator())
+
         menu.addItem(NSMenuItem(title: "Open Accessibility Settings…",
                                 action: #selector(openAccessibility), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Open Input Monitoring Settings…",
@@ -261,5 +275,76 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func openMicrophone() {
         NSWorkspace.shared.open(URL(string:
             "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")!)
+    }
+}
+
+// MARK: - Hotkey management
+
+extension AppDelegate: NSMenuDelegate {
+    /// Rebuilds the Hotkeys submenu each time it opens so it reflects the
+    /// current set. Each configured key is shown checked; clicking removes it.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        guard menu == hotkeysMenu else { return }
+        menu.removeAllItems()
+
+        if hotkeyStore.hotkeys.isEmpty {
+            let empty = NSMenuItem(title: "No hotkeys set", action: nil, keyEquivalent: "")
+            empty.isEnabled = false
+            menu.addItem(empty)
+        } else {
+            let header = NSMenuItem(title: "Push-to-talk keys (click to remove):",
+                                    action: nil, keyEquivalent: "")
+            header.isEnabled = false
+            menu.addItem(header)
+            for hotkey in hotkeyStore.hotkeys {
+                let item = NSMenuItem(title: hotkey.name,
+                                      action: #selector(removeHotkeyClicked(_:)), keyEquivalent: "")
+                item.target = self
+                item.state = .on
+                item.representedObject = NSNumber(value: hotkey.rawValue)
+                menu.addItem(item)
+            }
+        }
+
+        menu.addItem(.separator())
+        let add = NSMenuItem(title: "Add Hotkey…", action: #selector(addHotkeyClicked), keyEquivalent: "")
+        add.target = self
+        menu.addItem(add)
+    }
+
+    @objc private func addHotkeyClicked() {
+        guard monitorActive, let monitor = hotkeyMonitor else {
+            presentPermissionNeededAlert()
+            return
+        }
+        capturePanel.present(onCancel: { [weak self] in
+            self?.hotkeyMonitor?.cancelCapture()
+            Log.write("hotkey capture cancelled")
+        })
+        monitor.beginCapture { [weak self] hotkey in
+            guard let self else { return }
+            self.capturePanel.dismiss()
+            let added = self.hotkeyStore.add(hotkey)
+            self.hotkeyMonitor?.update(hotkeys: self.hotkeyStore.hotkeys)
+            Log.write("hotkey \(added ? "added" : "already set"): \(hotkey.name)")
+        }
+    }
+
+    @objc private func removeHotkeyClicked(_ sender: NSMenuItem) {
+        guard let raw = (sender.representedObject as? NSNumber)?.uint64Value,
+              let hotkey = Hotkey(rawValue: raw) else { return }
+        hotkeyStore.remove(hotkey)
+        hotkeyMonitor?.update(hotkeys: hotkeyStore.hotkeys)
+        Log.write("hotkey removed: \(hotkey.name)")
+    }
+
+    private func presentPermissionNeededAlert() {
+        let alert = NSAlert()
+        alert.messageText = "Grant permissions first"
+        alert.informativeText = "Adding a hotkey needs Accessibility and Input Monitoring "
+            + "access so Zwhisper can detect the key. Enable Zwhisper in System Settings → "
+            + "Privacy & Security, then try again."
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 }
