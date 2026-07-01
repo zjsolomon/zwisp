@@ -94,7 +94,20 @@ struct CleanupServiceTests {
         let body = try #require(request.httpBody)
         let object = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
         #expect(object["model"] as? String == "llama3.2:3b")
-        #expect(object["prompt"] as? String == "hello there")
+        // The transcript is wrapped in a delimited instruction, so it's embedded
+        // rather than sent verbatim.
+        #expect((object["prompt"] as? String)?.contains("hello there") == true)
         #expect(object["stream"] as? Bool == false)
+    }
+
+    // MARK: - wrapPrompt()
+
+    @Test func wrapPromptEmbedsTheTextBetweenDelimiters() {
+        let wrapped = CleanupService.wrapPrompt("what's the capital of france")
+        #expect(wrapped.contains("what's the capital of france"))
+        #expect(wrapped.contains("<<<"))
+        #expect(wrapped.contains(">>>"))
+        // It instructs the model to clean rather than answer.
+        #expect(wrapped.lowercased().contains("do not answer"))
     }
 }
