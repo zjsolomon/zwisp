@@ -1,7 +1,8 @@
 import AVFoundation
+import ZwhisperCore
 
-/// Captures microphone audio and resamples it to the 16 kHz mono Float32
-/// format WhisperKit expects.
+/// Captures microphone audio and resamples it to the mono Float32 format
+/// (16 kHz by default) that WhisperKit expects.
 final class AudioRecorder {
     private let engine = AVAudioEngine()
     private var converter: AVAudioConverter?
@@ -11,12 +12,16 @@ final class AudioRecorder {
     // from the main thread in stop().
     private let lock = NSLock()
 
-    private let targetFormat = AVAudioFormat(
-        commonFormat: .pcmFormatFloat32,
-        sampleRate: 16_000,
-        channels: 1,
-        interleaved: false
-    )!
+    private let targetFormat: AVAudioFormat
+
+    init(config: Configuration.Audio = Configuration.Audio()) {
+        self.targetFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: config.sampleRate,
+            channels: 1,
+            interleaved: false
+        )!
+    }
 
     func requestPermission() {
         AVCaptureDevice.requestAccess(for: .audio) { granted in
