@@ -115,9 +115,19 @@ modifiers are distinct, so you can bind Right ⌘ without affecting Left ⌘.
 
 Raw speech-to-text is literal: it keeps filler words and false starts, and often
 lacks punctuation. Zwhisper can optionally pass each transcript through a local
-LLM that rewrites it into cleaner written text — removing disfluencies, applying
-self-corrections ("three no wait four" → "four"), converting spoken punctuation,
-and normalising numbers and dates. This runs entirely on your machine.
+LLM that edits it into properly punctuated written text. This runs entirely on
+your machine.
+
+The cleanup follows a **conservation rule: what you said is what gets written.**
+It never paraphrases, summarises, or "improves" your wording — discourse phrases
+like "okay, let's see here" are your voice and stay in. It only:
+
+- removes non-word fillers (um, uh, er) and stutters ("the the" → "the"),
+- applies explicit self-corrections ("three no wait four" → "four"),
+- converts spoken punctuation ("comma" → ","), quoting ("quote … end quote" →
+  quotation marks), numbers and times ("five thirty pm" → "5:30 PM"), and
+  dictated enumerations ("number one … number two …" → "1. … 2. …"),
+- fixes capitalisation and sentence punctuation.
 
 It uses [Ollama](https://ollama.com), which needs no API key and keeps everything
 local:
@@ -138,9 +148,13 @@ Guardrails make the pass off-by-default-safe — dictation always works:
 - The model is asked not to reason out loud (`think: false`), and any
   chain-of-thought that slips through (`<think>…</think>`) is stripped.
 - Output is sanity-checked before it's typed: added preambles ("Here is the
-  cleaned text:"), wrapping quotes, and stray end-tokens are stripped, and an
-  output that balloons past the input (the model "answering" the dictation
-  instead of cleaning it) is discarded in favour of the raw transcript.
+  cleaned text:"), wrapping quotes, echoed delimiters, and stray end-tokens are
+  stripped, and an output that balloons past the input (the model "answering"
+  the dictation instead of cleaning it) is discarded in favour of the raw
+  transcript.
+- The conservation rule is enforced in code, not just prompted: if the model's
+  output drops too many of the words you actually said, it's treated as a
+  paraphrase and discarded — the raw transcript is typed instead.
 - Generation is capped relative to input length, and the model is kept warm
   between dictations so cleanup stays fast.
 
