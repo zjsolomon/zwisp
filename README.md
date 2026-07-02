@@ -33,9 +33,10 @@ key held  ──►  record mic (16 kHz)  ──►  release  ──►  Whisper
   synthetic key events, so it never touches or clobbers your clipboard.
 - **Push-to-talk** — hold your key, speak, release. No wake word, no window to
   click. Right ⌘ by default, and you can set your own — even several at once.
-- **Optional AI cleanup [Beta]** — pipe the raw transcript through a local LLM
-  ([Ollama](https://ollama.com)) to remove filler words and fix punctuation,
-  still fully offline.
+- **Optional AI cleanup** — pipe the raw transcript through a local LLM
+  ([Ollama](https://ollama.com)) to remove filler words, apply self-corrections,
+  and fix punctuation — still fully offline, with guardrails so a bad model
+  response never replaces your words.
 - **Lives in the menu bar** — no Dock icon and no windows. Can launch at login.
 - **Small codebase** — a compact, dependency-light Swift project that is
   straightforward to read and audit.
@@ -94,8 +95,8 @@ afterwards it runs fully offline.
 
 - Hold your **push-to-talk key** (Right ⌘ by default), speak, then release. The
   text is typed at your cursor.
-- Click the menu-bar icon for hotkey settings, permission shortcuts, the
-  AI-cleanup toggle, Launch at Login, and Quit.
+- Click the menu-bar icon for hotkey settings, permission shortcuts, AI cleanup
+  (on/off and model choice), Launch at Login, and Quit.
 
 ### Changing hotkeys
 
@@ -110,18 +111,13 @@ Only modifier keys (⌘ ⌥ ⌃ ⇧ and Fn 🌐) can be hotkeys — you hold one
 modifiers don't type characters or auto-repeat while held. Left and right
 modifiers are distinct, so you can bind Right ⌘ without affecting Left ⌘.
 
-## Optional: AI cleanup with Ollama [Beta]
-
-> **Beta.** This pass is experimental. Small local models don't always follow
-> the cleanup instructions perfectly — they can occasionally add a preamble
-> (e.g. "Here is the rewritten dictation:") or otherwise rewrite more than you'd
-> like. It's off-by-default-safe: if anything goes wrong or Ollama isn't
-> running, Zwhisper falls back to the raw transcript. Toggle it off any time.
+## Optional: AI cleanup with Ollama
 
 Raw speech-to-text is literal: it keeps filler words and false starts, and often
 lacks punctuation. Zwhisper can optionally pass each transcript through a local
-LLM that rewrites it into cleaner written text. This runs entirely on your
-machine.
+LLM that rewrites it into cleaner written text — removing disfluencies, applying
+self-corrections ("three no wait four" → "four"), converting spoken punctuation,
+and normalising numbers and dates. This runs entirely on your machine.
 
 It uses [Ollama](https://ollama.com), which needs no API key and keeps everything
 local:
@@ -132,9 +128,21 @@ ollama serve               # start the local server (also runs as a login servic
 ollama pull llama3.2:3b    # ~2 GB, one time
 ```
 
-Then leave **"Clean up with AI (Ollama) [Beta]"** enabled in the menu (it's on
-by default). If Ollama isn't running, Zwhisper silently falls back to the raw
-transcript, so dictation always works either way.
+Then leave **AI Cleanup (Ollama) → Clean Up Transcripts** enabled in the menu
+(it's on by default). The same submenu lists your installed Ollama models —
+click one to use it for cleanup.
+
+Guardrails make the pass off-by-default-safe — dictation always works:
+
+- If Ollama isn't running or errors, the raw transcript is used unchanged.
+- The model is asked not to reason out loud (`think: false`), and any
+  chain-of-thought that slips through (`<think>…</think>`) is stripped.
+- Output is sanity-checked before it's typed: added preambles ("Here is the
+  cleaned text:"), wrapping quotes, and stray end-tokens are stripped, and an
+  output that balloons past the input (the model "answering" the dictation
+  instead of cleaning it) is discarded in favour of the raw transcript.
+- Generation is capped relative to input length, and the model is kept warm
+  between dictations so cleanup stays fast.
 
 ## Configuration
 
@@ -146,8 +154,9 @@ All tunable settings live in one file:
   - `distil-whisper_distil-large-v3_turbo` — smaller, English-leaning
   - `openai_whisper-small.en` — much smaller, lower accuracy
   - `openai_whisper-base.en` — tiny and fastest
-- **AI cleanup** — the `Cleanup` struct sets the Ollama model, prompt, endpoint,
-  and timeout.
+- **AI cleanup** — the `Cleanup` struct sets the default Ollama model, prompt,
+  endpoint, timeout, keep-alive, and output-length budget. The active model is
+  picked from the menu (AI Cleanup → model list).
 - **Hotkeys** — configured from the menu bar (see
   [Changing hotkeys](#changing-hotkeys)); the default is defined by
   `HotkeyStore.defaultHotkeys`.

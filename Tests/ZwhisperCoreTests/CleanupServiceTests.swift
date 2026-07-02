@@ -76,6 +76,13 @@ struct CleanupServiceTests {
         #expect(await service.clean("") == "")
     }
 
+    @Test func cleanFallsBackToRawWhenOutputFailsSanityChecks() async {
+        // A truncated <think> block means the whole output is chain-of-thought.
+        let service = makeService(FakeClient(result: .success(
+            (json(#"{"response":"<think>The user wants me to"}"#), response(200)))))
+        #expect(await service.clean("raw dictation") == "raw dictation")
+    }
+
     // MARK: - buildRequest()
 
     @Test func buildRequestEncodesModelPromptAndHeaders() throws {
@@ -98,6 +105,109 @@ struct CleanupServiceTests {
         // rather than sent verbatim.
         #expect((object["prompt"] as? String)?.contains("hello there") == true)
         #expect(object["stream"] as? Bool == false)
+        // Guardrails: suppress reasoning, keep the model warm, budget the output.
+        #expect(object["think"] as? Bool == false)
+        #expect(object["keep_alive"] as? String == "30m")
+        let options = try #require(object["options"] as? [String: Any])
+        #expect(options["num_predict"] as? Int == 100)   // 11 chars × 2, floored at min
+    }
+
+    @Test func responseTokenBudgetScalesWithInputAndClamps() {
+        let config = Configuration.Cleanup(
+            minResponseTokens: 100, maxResponseTokens: 2_048, responseTokenMultiplier: 2)
+        let defaults = UserDefaults(suiteName: "ZwhisperTests-\(UUID().uuidString)")!
+        let service = CleanupService(
+            config: config, httpClient: FakeClient(result: .failure(URLError(.badURL))),
+            defaults: defaults)
+
+        #expect(service.responseTokenBudget(for: "short") == 100)                        // floor
+        #expect(service.responseTokenBudget(for: String(repeating: "a", count: 300)) == 600)
+        #expect(service.responseTokenBudget(for: String(repeating: "a", count: 5_000)) == 2_048) // cap
+    }
+
+    // MARK: - model selection
+
+    @Test func modelDefaultsToConfigAndPersistsUserChoice() {
+        let defaults = UserDefaults(suiteName: "ZwhisperTests-\(UUID().uuidString)")!
+        let config = Configuration.Cleanup(model: "llama3.2:3b")
+        let client = FakeClient(result: .failure(URLError(.badURL)))
+
+        let service = CleanupService(config: config, httpClient: client, defaults: defaults)
+        #expect(service.model == "llama3.2:3b")
+
+        service.model = "qwen3:4b"
+        // A fresh service over the same defaults sees the persisted pick.
+        let reloaded = CleanupService(config: config, httpClient: client, defaults: defaults)
+        #expect(reloaded.model == "qwen3:4b")
+        // And the request uses it.
+        let body = reloaded.buildRequest(for: "hi").httpBody!
+        let object = try! JSONSerialization.jsonObject(with: body) as! [String: Any]
+        #expect(object["model"] as? String == "qwen3:4b")
+    }
+
+    @Test func parseModelListExtractsNames() {
+        let data = json(#"{"models":[{"name":"llama3.2:3b","size":1},{"name":"qwen3:4b"}]}"#)
+        #expect(CleanupService.parseModelList(data: data, response: response(200))
+                == ["llama3.2:3b", "qwen3:4b"])
+    }
+
+    @Test func parseModelListReturnsNilForNon200OrMalformed() {
+        #expect(CleanupService.parseModelList(data: json(#"{"models":[]}"#), response: response(500)) == nil)
+        #expect(CleanupService.parseModelList(data: json("nope"), response: response(200)) == nil)
+    }
+
+    // MARK: - sanitize()
+
+    @Test func sanitizePassesOrdinaryOutputThrough() {
+        #expect(CleanupService.sanitize("Hello world.", raw: "hello world") == "Hello world.")
+    }
+
+    @Test func sanitizeStripsThinkBlocks() {
+        let output = "<think>\nThe user said hello world.\n</think>\n\nHello world."
+        #expect(CleanupService.sanitize(output, raw: "hello world") == "Hello world.")
+    }
+
+    @Test func sanitizeRejectsUnclosedThinkBlock() {
+        // Token budget cut generation off mid-think: nothing usable.
+        #expect(CleanupService.sanitize("<think>The user wants", raw: "hello world") == nil)
+    }
+
+    @Test func sanitizeStripsEndTokens() {
+        #expect(CleanupService.sanitize("Hello world.<|im_end|>", raw: "hello world") == "Hello world.")
+        #expect(CleanupService.sanitize("Hello world.</s>", raw: "hello world") == "Hello world.")
+    }
+
+    @Test func sanitizeRejectsRunawayGeneration() {
+        // Output far longer than the dictation = the model answered, not cleaned.
+        let essay = String(repeating: "The sea is vast and blue. ", count: 30)
+        #expect(CleanupService.sanitize(essay, raw: "write me a poem about the sea") == nil)
+    }
+
+    @Test func sanitizeAllowsModestGrowth() {
+        // Punctuation and casing legitimately grow the text a little.
+        let raw = "hi"
+        #expect(CleanupService.sanitize("Hi there!", raw: raw) == "Hi there!")
+    }
+
+    @Test func sanitizeDropsPreambleLabelLine() {
+        let output = "Here is the cleaned text:\nHello world."
+        #expect(CleanupService.sanitize(output, raw: "hello world") == "Hello world.")
+    }
+
+    @Test func sanitizeKeepsLabelLikeLineDictatedByUser() {
+        let output = "Here is the cleaned version:\nStep one."
+        let raw = "here is the cleaned version colon step one"
+        #expect(CleanupService.sanitize(output, raw: raw) == output)
+    }
+
+    @Test func sanitizeUnwrapsQuotesTheModelAdded() {
+        #expect(CleanupService.sanitize("\"Hello world.\"", raw: "hello world") == "Hello world.")
+        #expect(CleanupService.sanitize("“Hello world.”", raw: "hello world") == "Hello world.")
+    }
+
+    @Test func sanitizeKeepsQuotesTheSpeakerDictated() {
+        let raw = "\"quote hello world end quote\""
+        #expect(CleanupService.sanitize("\"Hello world.\"", raw: raw) == "\"Hello world.\"")
     }
 
     // MARK: - wrapPrompt()
