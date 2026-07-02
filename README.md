@@ -140,6 +140,10 @@ ollama serve               # start the local server (also runs as a login servic
 ollama pull llama3.2:3b    # ~2 GB, one time
 ```
 
+If Ollama is installed but not running, the menu shows **"Ollama isn't running —
+click to start"**, which launches it for you (the Ollama app if you have it,
+otherwise `ollama serve`).
+
 Then leave **AI Cleanup (Ollama) → Clean Up Transcripts** enabled in the menu
 (it's on by default). The same submenu lists your installed Ollama models —
 click one to use it for cleanup.

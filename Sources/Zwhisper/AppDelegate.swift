@@ -298,12 +298,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         cleanupMenu.removeItem(at: index)
 
         guard let models, !models.isEmpty else {
-            let title = models == nil
-                ? "Ollama isn't running"
-                : "No models installed (ollama pull …)"
-            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-            item.isEnabled = false
-            cleanupMenu.insertItem(item, at: index)
+            if models == nil {
+                // Not reachable — offer to start it right from the menu.
+                let item = NSMenuItem(title: "Ollama isn't running — click to start",
+                                      action: #selector(startOllama), keyEquivalent: "")
+                item.target = self
+                cleanupMenu.insertItem(item, at: index)
+            } else {
+                let item = NSMenuItem(title: "No models installed (ollama pull …)",
+                                      action: nil, keyEquivalent: "")
+                item.isEnabled = false
+                cleanupMenu.insertItem(item, at: index)
+            }
             return
         }
 
@@ -323,6 +329,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func selectCleanupModel(_ sender: NSMenuItem) {
         cleanup.model = sender.title
         Log.write("cleanup model set to \(sender.title)")
+    }
+
+    /// User clicked "Ollama isn't running — click to start". Try, in order:
+    /// the Ollama.app bundle (menu-bar app; also registers itself at login),
+    /// the CLI (`ollama serve`, detached so it outlives Zwhisper), and finally
+    /// the download page for people who don't have Ollama at all.
+    @objc private func startOllama() {
+        let appURL = ["com.ollama.ollama", "com.electron.ollama"]
+            .compactMap { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) }
+            .first
+            ?? Self.existingURL("/Applications/Ollama.app")
+        if let appURL {
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = false   // background server app; keep focus
+            NSWorkspace.shared.openApplication(at: appURL, configuration: configuration)
+            Log.write("launched Ollama.app at \(appURL.path)")
+            return
+        }
+
+        if let cli = ["/opt/homebrew/bin/ollama", "/usr/local/bin/ollama"]
+            .first(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
+            // Detach fully so the server isn't tied to Zwhisper's lifetime.
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/sh")
+            process.arguments = ["-c", "nohup \(cli) serve >/dev/null 2>&1 &"]
+            do {
+                try process.run()
+                Log.write("started '\(cli) serve' (detached)")
+            } catch {
+                Log.write("failed to start ollama serve: \(error)")
+            }
+            return
+        }
+
+        NSWorkspace.shared.open(URL(string: "https://ollama.com/download")!)
+        Log.write("Ollama not found; opened download page")
+    }
+
+    private static func existingURL(_ path: String) -> URL? {
+        FileManager.default.fileExists(atPath: path) ? URL(fileURLWithPath: path) : nil
     }
 
     @objc private func toggleCleanup(_ sender: NSMenuItem) {
