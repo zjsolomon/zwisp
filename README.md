@@ -78,9 +78,6 @@ separate privacy permissions. Grant these once:
    Monitoring** → enable **Zwhisper**. Required to detect the `Fn` key globally.
 3. **Accessibility** — System Settings → Privacy & Security → **Accessibility** →
    enable **Zwhisper**. Required to type the transcribed text into other apps.
-4. **Only if you pick `Fn` as a hotkey** — System Settings → Keyboard →
-   "Press 🌐 key to" → **Do Nothing**, so `Fn` doesn't also open the emoji
-   picker or switch input source. (Not needed for the default Right ⌘.)
 
 The menu-bar icon turns orange until the hotkey permissions are granted. Zwhisper
 watches for the grant and starts working within a couple of seconds — no relaunch
