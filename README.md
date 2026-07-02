@@ -142,6 +142,21 @@ Then leave **AI Cleanup (Ollama) → Clean Up Transcripts** enabled in the menu
 (it's on by default). The same submenu lists your installed Ollama models —
 click one to use it for cleanup.
 
+### Which model?
+
+Benchmarked on Zwhisper's own cleanup battery (Apple Silicon, warm model,
+median per-dictation latency):
+
+| Model | Size | Median | Notes |
+|---|---|---|---|
+| `qwen3:4b-instruct` | 2.5 GB | ~0.7 s | **Recommended.** Best punctuation and fidelity; question marks and commas consistently right. |
+| `llama3.2:3b` | 2.0 GB | ~0.5 s | Default. Fastest; occasional comma/question-mark slips. |
+| `gemma3:4b` | 3.3 GB | ~2.5 s | Excellent fidelity, but noticeably slow, and outputs typographic (curly) quotes. |
+
+Avoid `phi4-mini` (paraphrases the speaker) and thinking-mode models like
+`deepseek-r1` (reasoning latency; Zwhisper suppresses thinking where the model
+allows it, but non-thinking instruct models are the right tool).
+
 Guardrails make the pass off-by-default-safe — dictation always works:
 
 - If Ollama isn't running or errors, the raw transcript is used unchanged.
