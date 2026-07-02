@@ -17,12 +17,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let hotkeyStore = HotkeyStore()
     private let capturePanel = HotkeyCapturePanel()
     private let hotkeysMenu = NSMenu(title: "Hotkeys")
+    private let cleanupMenu = NSMenu(title: "AI Cleanup")
 
     // Two independent readiness signals; the menu-bar state is derived from both.
     private var monitorActive = false
     private var modelReady = false
     private var isBusy = false            // recording/transcribing in progress
     private var retryTimer: Timer?
+    private var cleanupMenuGeneration = 0 // invalidates in-flight model fetches
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Log.write("=== launched; modelName=\(config.whisperModel) ===")
@@ -169,10 +171,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "Open Microphone Settings…",
                                 action: #selector(openMicrophone), keyEquivalent: ""))
         menu.addItem(.separator())
-        let cleanupItem = NSMenuItem(title: "Clean up with AI (Ollama) [Beta]",
-                                     action: #selector(toggleCleanup), keyEquivalent: "")
-        cleanupItem.state = cleanup.enabled ? .on : .off
+
+        // AI Cleanup submenu — rebuilt each time it opens (see menuNeedsUpdate).
+        cleanupMenu.delegate = self
+        let cleanupItem = NSMenuItem(title: "AI Cleanup (Ollama)", action: nil, keyEquivalent: "")
+        cleanupItem.submenu = cleanupMenu
         menu.addItem(cleanupItem)
+
         let loginItem = NSMenuItem(title: "Launch at Login",
                                    action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
         loginItem.state = (SMAppService.mainApp.status == .enabled) ? .on : .off
@@ -181,6 +186,72 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)),
                                 keyEquivalent: "q"))
         statusItem.menu = menu
+    }
+
+    /// Populates the AI Cleanup submenu: the on/off toggle immediately, then the
+    /// installed-model list once Ollama answers (the menu updates in place).
+    private func rebuildCleanupMenu() {
+        cleanupMenu.removeAllItems()
+
+        let toggle = NSMenuItem(title: "Clean Up Transcripts",
+                                action: #selector(toggleCleanup), keyEquivalent: "")
+        toggle.target = self
+        toggle.state = cleanup.enabled ? .on : .off
+        cleanupMenu.addItem(toggle)
+        cleanupMenu.addItem(.separator())
+
+        let header = NSMenuItem(title: "Model (via Ollama):", action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        cleanupMenu.addItem(header)
+        let placeholder = NSMenuItem(title: "Checking Ollama…", action: nil, keyEquivalent: "")
+        placeholder.isEnabled = false
+        cleanupMenu.addItem(placeholder)
+
+        // Generation token instead of capturing the placeholder item: NSMenuItem
+        // isn't Sendable, and a stale fetch must not touch a rebuilt menu.
+        cleanupMenuGeneration += 1
+        let generation = cleanupMenuGeneration
+        Task { [weak self] in
+            guard let self else { return }
+            let models = await self.cleanup.availableModels()
+            await MainActor.run { self.showCleanupModels(models, ifCurrent: generation) }
+        }
+    }
+
+    /// Swaps the "Checking Ollama…" placeholder (the menu's last item) for the
+    /// model list (current pick checked) or a "not running" notice. No-op if the
+    /// menu was rebuilt since the fetch started.
+    private func showCleanupModels(_ models: [String]?, ifCurrent generation: Int) {
+        guard generation == cleanupMenuGeneration, cleanupMenu.numberOfItems > 0 else { return }
+        let index = cleanupMenu.numberOfItems - 1
+        cleanupMenu.removeItem(at: index)
+
+        guard let models, !models.isEmpty else {
+            let title = models == nil
+                ? "Ollama isn't running"
+                : "No models installed (ollama pull …)"
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            cleanupMenu.insertItem(item, at: index)
+            return
+        }
+
+        // If the saved model was removed from Ollama, still list it (unchecked
+        // models can be picked; the saved one keeps working as a name).
+        var names = models
+        if !names.contains(cleanup.model) { names.append(cleanup.model) }
+        for (offset, name) in names.enumerated() {
+            let item = NSMenuItem(title: name, action: #selector(selectCleanupModel(_:)),
+                                  keyEquivalent: "")
+            item.target = self
+            item.state = (name == cleanup.model) ? .on : .off
+            cleanupMenu.insertItem(item, at: index + offset)
+        }
+    }
+
+    @objc private func selectCleanupModel(_ sender: NSMenuItem) {
+        cleanup.model = sender.title
+        Log.write("cleanup model set to \(sender.title)")
     }
 
     @objc private func toggleCleanup(_ sender: NSMenuItem) {
@@ -281,9 +352,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 // MARK: - Hotkey management
 
 extension AppDelegate: NSMenuDelegate {
-    /// Rebuilds the Hotkeys submenu each time it opens so it reflects the
-    /// current set. Each configured key is shown checked; clicking removes it.
+    /// Rebuilds the Hotkeys / AI Cleanup submenus each time they open so they
+    /// reflect current state.
     func menuNeedsUpdate(_ menu: NSMenu) {
+        if menu == cleanupMenu {
+            rebuildCleanupMenu()
+            return
+        }
         guard menu == hotkeysMenu else { return }
         menu.removeAllItems()
 
