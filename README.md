@@ -92,6 +92,11 @@ afterwards it runs fully offline.
 
 - Hold your **push-to-talk key** (Right ⌘ by default), speak, then release. The
   text is typed at your cursor.
+- You can keep working while it thinks: dictations queue up and are typed in
+  order. Injection politely waits until your hands are still (no keys for a
+  moment, no modifier held), and if you've switched to a different app in the
+  meantime it skips typing rather than dumping text into the wrong window
+  (logged in `~/Library/Logs/Zwhisper.log`).
 - Click the menu-bar icon for hotkey settings, permission shortcuts, AI cleanup
   (on/off and model choice), Launch at Login, and Quit.
 

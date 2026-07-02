@@ -22,7 +22,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // Two independent readiness signals; the menu-bar state is derived from both.
     private var monitorActive = false
     private var modelReady = false
-    private var isBusy = false            // recording/transcribing in progress
+    // Recording (mic open) and processing (transcribe/clean/inject) are
+    // deliberately SEPARATE state: a new dictation may start while previous
+    // ones are still in the pipeline, so one shared "busy" flag corrupts both.
+    private var isRecording = false
+    private var jobsInFlight = 0
+    /// Tail of the processing chain. Each finished recording awaits the
+    /// previous job before running, so transcriptions never run concurrently
+    /// on WhisperKit and results are typed in dictation order.
+    private var pipelineTail: Task<Void, Never>?
     private var retryTimer: Timer?
     private var cleanupMenuGeneration = 0 // invalidates in-flight model fetches
 
@@ -106,47 +114,110 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func startRecording() {
         Log.write("hotkey down (modelReady=\(modelReady))")
-        guard modelReady, transcriber != nil else { return }
-        isBusy = true
+        guard modelReady, transcriber != nil, !isRecording else { return }
+        isRecording = true
         recorder.start()
-        setState(.recording)
+        refreshState()
     }
 
     private func stopAndTranscribe() {
         Log.write("hotkey up")
-        guard isBusy, let transcriber else { Log.write("(not busy; ignoring)"); return }
+        guard isRecording, let transcriber else { Log.write("(not recording; ignoring)"); return }
+        isRecording = false
         let samples = recorder.stop()
         let seconds = Double(samples.count) / config.audio.sampleRate
         Log.write("captured \(samples.count) samples (\(String(format: "%.2f", seconds))s)")
         guard samples.count > config.audio.minimumSampleCount else {   // stray tap
             Log.write("too short; skipping")
-            isBusy = false
             refreshState()
             return
         }
-        setState(.thinking)
-        Task {
-            let raw = await transcriber.transcribe(samples)
-            Log.write("raw transcript: '\(raw)'")
-            let text = await cleanup.clean(raw)
-            Log.write("final text: '\(text)'")
-            await MainActor.run {
-                if !text.isEmpty {
-                    self.injector.inject(text)
-                    Log.write("injected \(text.count) chars")
-                } else {
-                    Log.write("empty result; nothing injected")
-                }
-                self.isBusy = false
-                self.refreshState()
-            }
+        // Remember where the user dictated, so a slow cleanup can't type the
+        // result into whatever app they switched to in the meantime.
+        let targetPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        jobsInFlight += 1
+        refreshState()
+
+        // Chain onto the previous job: strictly serial, strictly in order.
+        let previous = pipelineTail
+        pipelineTail = Task { [weak self] in
+            await previous?.value
+            await self?.process(samples: samples, with: transcriber, targetPID: targetPID)
         }
     }
 
-    /// Derives the resting menu-bar state from the two readiness signals.
+    /// One dictation's trip through the pipeline: transcribe → clean → inject.
+    private func process(samples: [Float], with transcriber: Transcriber,
+                         targetPID: pid_t?) async {
+        let raw = await transcriber.transcribe(samples)
+        Log.write("raw transcript: '\(raw)'")
+        let text = await cleanup.clean(raw)
+        Log.write("final text: '\(text)'")
+        await finishJob(injecting: text, targetPID: targetPID)
+    }
+
+    /// Waits for the user's hands to be still, checks focus hasn't moved, then
+    /// types the result. Awaited by the pipeline so injections stay in order.
+    @MainActor
+    private func finishJob(injecting text: String, targetPID: pid_t?) async {
+        defer {
+            jobsInFlight -= 1
+            refreshState()
+        }
+        guard !text.isEmpty else {
+            Log.write("empty result; nothing injected")
+            return
+        }
+        let waited = await waitUntilSafeToType()
+        if waited > 0.05 {
+            Log.write("waited \(String(format: "%.1f", waited))s for quiet keyboard")
+        }
+        let frontPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        guard targetPID == nil || frontPID == targetPID else {
+            Log.write("focus moved to another app; dictation NOT typed: '\(text)'")
+            return
+        }
+        injector.inject(text)
+        Log.write("injected \(text.count) chars")
+    }
+
+    /// Injecting while the user is typing interleaves synthetic and physical
+    /// events — and a held modifier turns injected characters into app
+    /// shortcuts. Poll until the keyboard has been quiet for a moment (or the
+    /// cap expires), per `Configuration.InjectionGate`. Returns seconds waited.
+    @MainActor
+    private func waitUntilSafeToType() async -> TimeInterval {
+        let start = Date()
+        while true {
+            let waited = Date().timeIntervalSince(start)
+            let sinceKey = CGEventSource.secondsSinceLastEventType(
+                .hidSystemState, eventType: .keyDown)
+            let modifiers = CGEventSource.flagsState(.hidSystemState)
+                .intersection([.maskCommand, .maskAlternate, .maskControl,
+                               .maskShift, .maskSecondaryFn])
+            if Configuration.InjectionGate.canInject(
+                isRecording: isRecording,
+                secondsSinceKeyEvent: sinceKey,
+                modifiersDown: !modifiers.isEmpty,
+                waited: waited,
+                config: config.injection
+            ) {
+                return waited
+            }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+    }
+
+    /// Derives the menu-bar state: recording wins, then pipeline activity,
+    /// then the resting state from the two readiness signals.
     private func refreshState() {
-        guard !isBusy else { return }
-        setState(.resting(monitorActive: monitorActive, modelReady: modelReady))
+        if isRecording {
+            setState(.recording)
+        } else if jobsInFlight > 0 {
+            setState(.thinking)
+        } else {
+            setState(.resting(monitorActive: monitorActive, modelReady: modelReady))
+        }
     }
 
     // MARK: - Menu bar

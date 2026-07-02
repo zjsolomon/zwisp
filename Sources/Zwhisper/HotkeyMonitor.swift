@@ -101,18 +101,19 @@ final class HotkeyMonitor {
     }
 
     private func handle(event: CGEvent) {
-        // `.flagsChanged` fires solely for modifier keys — never letters/arrows.
-        // `flags.rawValue` includes device-dependent bits (left vs right), which
-        // is how each Hotkey is identified. Keycodes are unreliable for Fn on
-        // modern MacBooks, so we key off the flag bits only.
+        // `.flagsChanged` events identify modifiers by device-dependent flag
+        // bits (left vs right ⌘ differ). The keycode matters for one case:
+        // arrow/navigation keys also toggle the Fn flag bit, so Fn transitions
+        // are only honoured when the keycode is the Fn key itself — see
+        // `Hotkey.held(of:flags:keyCode:previouslyHeld:)`.
         let flags = event.flags.rawValue
+        let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
         defer { previousFlags = flags }
 
         if let capture = captureCompletion {
-            // First known modifier whose bit just went from 0 → 1.
-            if let pressed = Hotkey.allCases.first(where: {
-                (flags & $0.mask) != 0 && (previousFlags & $0.mask) == 0
-            }) {
+            if let pressed = Hotkey.newlyPressed(
+                flags: flags, previousFlags: previousFlags, keyCode: keyCode
+            ) {
                 captureCompletion = nil
                 DispatchQueue.main.async { capture(pressed) }
             }
@@ -120,7 +121,8 @@ final class HotkeyMonitor {
         }
 
         let wasActive = !heldKeys.isEmpty
-        heldKeys = hotkeys.filter { (flags & $0.mask) != 0 }
+        heldKeys = Hotkey.held(
+            of: hotkeys, flags: flags, keyCode: keyCode, previouslyHeld: heldKeys)
         let isActive = !heldKeys.isEmpty
 
         if isActive && !wasActive {
