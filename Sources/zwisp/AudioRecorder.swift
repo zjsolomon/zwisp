@@ -51,6 +51,15 @@ final class AudioRecorder {
         }
     }
 
+    /// A copy of everything recorded so far, without stopping capture — the
+    /// streaming worker's view of the growing buffer. Same lock discipline as
+    /// stop(): `samples` is written on the realtime audio thread.
+    func snapshot() -> [Float] {
+        lock.lock()
+        defer { lock.unlock() }
+        return samples
+    }
+
     /// Stops capture and returns the recorded samples at 16 kHz mono.
     func stop() -> [Float] {
         guard isRunning else { return [] }

@@ -251,6 +251,8 @@ release build on every push and pull request.
 | `Hotkey.swift` | The push-to-talk modifier keys and their flag masks |
 | `HotkeyStore.swift` | Persists the user's hotkeys (add/remove) |
 | `CleanupService.swift` | Optional local LLM cleanup pass via Ollama |
+| `StreamingTranscript.swift` | Confirms stable segments during eager (streaming) transcription |
+| `AudioPadding.swift` | Pads sub-second recordings past WhisperKit's decode floor |
 | `TextInjector.swift` | Types transcribed text into the focused app |
 | `TranscriptFormatter.swift` | Joins WhisperKit segments into text |
 | `Logger.swift` | Append-to-file logger |
@@ -264,13 +266,14 @@ release build on every push and pull request.
 | `HotkeyMonitor.swift` | Global `CGEventTap` watching the configured modifiers |
 | `HotkeyCapturePanel.swift` | "Press a key" panel for adding a hotkey |
 | `AudioRecorder.swift` | `AVAudioEngine` capture, resampled to 16 kHz mono |
-| `Transcriber.swift` | WhisperKit wrapper (on-device speech-to-text) |
+| `Transcriber.swift` | WhisperKit wrapper (on-device speech-to-text), serialized |
+| `StreamingWorker.swift` | Eagerly transcribes the growing buffer while the key is held |
 
 ## Limitations
 
-- Transcription runs **after** you release the push-to-talk key (batch, not
-  live streaming).
-  WhisperKit supports streaming if you'd like to add lower-latency output.
+- Transcription streams **while you hold the key** (audio is transcribed and
+  confirmed in the background as you speak), but the text only appears after
+  you release — there's no live-preview overlay yet.
 - The app is ad-hoc / self-signed, so permissions are tied to a specific build;
   rebuilding may occasionally require re-granting Accessibility. See
   [`setup-signing.sh`](setup-signing.sh) for a stable local signing identity that
