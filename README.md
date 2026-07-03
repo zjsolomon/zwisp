@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="Assets/logo.png" alt="Zwhisper logo" width="160" height="160">
+  <img src="Assets/logo.png" alt="zwisp logo" width="160" height="160">
 </p>
 
-<h1 align="center">Zwhisper</h1>
+<h1 align="center">zwisp</h1>
 
 **Private, on-device dictation for macOS.** Hold your push-to-talk key
 (Right ⌘ by default), talk, release — your speech is transcribed locally and
@@ -11,21 +11,21 @@ hosted dictation tools like Wispr Flow: the same hold-a-key-anywhere workflow,
 but nothing leaves your Mac, and no account is required. The only network
 access is a one-time download of the speech model.
 
-[![CI](https://github.com/zjsolomon/Zwhisper/actions/workflows/ci.yml/badge.svg)](https://github.com/zjsolomon/Zwhisper/actions/workflows/ci.yml)
+[![CI](https://github.com/zjsolomon/zwisp/actions/workflows/ci.yml/badge.svg)](https://github.com/zjsolomon/zwisp/actions/workflows/ci.yml)
 ![Status](https://img.shields.io/badge/status-beta-yellow)
 ![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-blue)
 ![Swift](https://img.shields.io/badge/swift-5.9%2B-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-> **Beta.** Zwhisper works for day-to-day dictation, but it's young: expect
+> **Beta.** zwisp works for day-to-day dictation, but it's young: expect
 > rough edges, and defaults or behaviour may still change between versions.
-> [Bug reports](https://github.com/zjsolomon/Zwhisper/issues) are very welcome.
+> [Bug reports](https://github.com/zjsolomon/zwisp/issues) are very welcome.
 
 ## Quick start
 
 ```bash
-git clone https://github.com/zjsolomon/Zwhisper.git
-cd Zwhisper && ./install.sh    # builds, installs to /Applications, launches
+git clone https://github.com/zjsolomon/zwisp.git
+cd zwisp && ./install.sh    # builds, installs to /Applications, launches
 ```
 
 Needs an Apple Silicon Mac on macOS 14+ and a Swift toolchain
@@ -66,7 +66,7 @@ running, click the 🎙️ menu-bar icon → **Launch at Login** if you'd like i
 start automatically on every boot — you can toggle that off there any time.
 
 > Prefer not to install into `/Applications`? Run `./build-app.sh` to produce
-> `Zwhisper.app` in the project folder and `open Zwhisper.app` from there.
+> `zwisp.app` in the project folder and `open zwisp.app` from there.
 
 ## First-run setup (one time)
 
@@ -75,16 +75,16 @@ separate privacy permissions. Grant these once:
 
 1. **Microphone** — macOS prompts on first launch. Click **Allow**.
 2. **Input Monitoring** — System Settings → Privacy & Security → **Input
-   Monitoring** → enable **Zwhisper**. Required to detect your push-to-talk key
+   Monitoring** → enable **zwisp**. Required to detect your push-to-talk key
    globally.
 3. **Accessibility** — System Settings → Privacy & Security → **Accessibility** →
-   enable **Zwhisper**. Required to type the transcribed text into other apps.
+   enable **zwisp**. Required to type the transcribed text into other apps.
 
-The menu-bar icon turns orange until the hotkey permissions are granted. Zwhisper
+The menu-bar icon turns orange until the hotkey permissions are granted. zwisp
 watches for the grant and starts working within a couple of seconds — no relaunch
 needed. The shortcuts in the menu jump you straight to each Settings pane.
 
-On first use, Zwhisper downloads the speech model from Hugging Face (the default
+On first use, zwisp downloads the speech model from Hugging Face (the default
 `large-v3-turbo` is ~1.5 GB; lighter models are much smaller — see
 [Configuration](#configuration)). That's the only time it needs the internet;
 afterwards it runs fully offline.
@@ -97,7 +97,7 @@ afterwards it runs fully offline.
   order. Injection politely waits until your hands are still (no keys for a
   moment, no modifier held), and if you've switched to a different app in the
   meantime it skips typing rather than dumping text into the wrong window
-  (logged in `~/Library/Logs/Zwhisper.log`).
+  (logged in `~/Library/Logs/zwisp.log`).
 - Click the menu-bar icon for hotkey settings, permission shortcuts, AI cleanup
   (on/off and model choice), Launch at Login, and Quit.
 
@@ -117,7 +117,7 @@ modifiers are distinct, so you can bind Right ⌘ without affecting Left ⌘.
 ## Optional: AI cleanup with Ollama
 
 Raw speech-to-text is literal: it keeps filler words and false starts, and often
-lacks punctuation. Zwhisper can optionally pass each transcript through a local
+lacks punctuation. zwisp can optionally pass each transcript through a local
 LLM that edits it into properly punctuated written text. This runs entirely on
 your machine.
 
@@ -151,7 +151,7 @@ click one to use it for cleanup.
 
 ### Which model?
 
-Benchmarked on Zwhisper's own cleanup battery (Apple Silicon, warm model,
+Benchmarked on zwisp's own cleanup battery (Apple Silicon, warm model,
 median per-dictation latency):
 
 | Model | Size | Median | Notes |
@@ -161,7 +161,7 @@ median per-dictation latency):
 | `gemma3:4b` | 3.3 GB | ~2.5 s | Excellent fidelity, but noticeably slow, and outputs typographic (curly) quotes. |
 
 Avoid `phi4-mini` (paraphrases the speaker) and thinking-mode models like
-`deepseek-r1` (reasoning latency; Zwhisper suppresses thinking where the model
+`deepseek-r1` (reasoning latency; zwisp suppresses thinking where the model
 allows it, but non-thinking instruct models are the right tool).
 
 Guardrails make cleanup fail-safe — dictation always works, and a bad model
@@ -189,7 +189,7 @@ response never replaces your words.
 ## Configuration
 
 All tunable settings live in one file:
-[`Sources/ZwhisperCore/Configuration.swift`](Sources/ZwhisperCore/Configuration.swift).
+[`Sources/ZwispCore/Configuration.swift`](Sources/ZwispCore/Configuration.swift).
 
 - **Speech model** — `whisperModel`. Default `openai_whisper-large-v3-v20240930_turbo`
   (high accuracy, fast on Apple Silicon). Lighter alternatives:
@@ -211,7 +211,7 @@ The code is split into a dependency-free core library and a thin app layer, so
 the pure logic is unit-tested without pulling in WhisperKit / CoreML:
 
 ```bash
-swift test           # fast: runs the ZwhisperCore test suite (Swift Testing)
+swift test           # fast: runs the ZwispCore test suite (Swift Testing)
 swift build          # builds the full app (compiles WhisperKit; slower)
 ```
 
@@ -220,7 +220,7 @@ release build on every push and pull request.
 
 ### Architecture
 
-**`ZwhisperCore`** — pure domain logic, no external dependencies:
+**`ZwispCore`** — pure domain logic, no external dependencies:
 
 | File | Responsibility |
 |------|----------------|
@@ -233,7 +233,7 @@ release build on every push and pull request.
 | `TranscriptFormatter.swift` | Joins WhisperKit segments into text |
 | `Logger.swift` | Append-to-file logger |
 
-**`Zwhisper`** — the app: system-framework and WhisperKit glue on top of the core:
+**`zwisp`** — the app: system-framework and WhisperKit glue on top of the core:
 
 | File | Responsibility |
 |------|----------------|
@@ -257,7 +257,7 @@ release build on every push and pull request.
 ## Contributing
 
 Issues and pull requests are welcome. Please run `swift test` before opening a
-PR, and keep the core logic in `ZwhisperCore` (with a test) so it stays covered
+PR, and keep the core logic in `ZwispCore` (with a test) so it stays covered
 by CI.
 
 ## Acknowledgements

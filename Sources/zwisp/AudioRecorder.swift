@@ -1,5 +1,5 @@
 import AVFoundation
-import ZwhisperCore
+import ZwispCore
 
 /// Captures microphone audio and resamples it to the mono Float32 format
 /// (16 kHz by default) that WhisperKit expects.
@@ -25,7 +25,7 @@ final class AudioRecorder {
 
     func requestPermission() {
         AVCaptureDevice.requestAccess(for: .audio) { granted in
-            if !granted { NSLog("Zwhisper: microphone permission denied") }
+            if !granted { NSLog("zwisp: microphone permission denied") }
         }
     }
 
@@ -89,7 +89,7 @@ final class AudioRecorder {
         }
 
         if let error {
-            NSLog("Zwhisper: audio convert error: \(error)")
+            NSLog("zwisp: audio convert error: \(error)")
             return
         }
 

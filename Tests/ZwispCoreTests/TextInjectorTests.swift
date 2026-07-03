@@ -1,5 +1,5 @@
 import Testing
-@testable import ZwhisperCore
+@testable import ZwispCore
 
 struct TextInjectorTests {
     private func string(_ chunk: [UInt16]) -> String {

@@ -1,5 +1,5 @@
 import AppKit
-import ZwhisperCore
+import ZwispCore
 
 /// Watches the global keyboard for the user's configured push-to-talk modifier
 /// keys, using a passive `CGEventTap` on `.flagsChanged`. Holding *any*
@@ -59,7 +59,7 @@ final class HotkeyMonitor {
             callback: callback,
             userInfo: Unmanaged.passUnretained(self).toOpaque()
         ) else {
-            NSLog("Zwhisper: failed to create event tap (grant Accessibility permission)")
+            NSLog("zwisp: failed to create event tap (grant Accessibility permission)")
             return false
         }
 

@@ -1,6 +1,6 @@
 import AppKit
 
-// Zwhisper: hold your push-to-talk key (Right ⌘ by default), talk, and the
+// zwisp: hold your push-to-talk key (Right ⌘ by default), talk, and the
 // transcribed text is typed into whatever app is focused. Transcription runs
 // fully on-device via WhisperKit.
 

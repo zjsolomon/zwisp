@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the Zwhisper pixel-art logo: a microphone with a bold Z on its head.
+"""Generate the zwisp pixel-art logo: a microphone with a bold Z on its head.
 
 Designed on a 32x32 pixel grid (true pixel-art), then scaled up with
 nearest-neighbour so the pixels stay crisp at every size. Pure stdlib (zlib)

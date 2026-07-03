@@ -1,6 +1,6 @@
 import Testing
 import AppKit
-@testable import ZwhisperCore
+@testable import ZwispCore
 
 struct MenuBarStateTests {
     @Test func noPermissionWhenMonitorInactive() {

@@ -21,7 +21,7 @@ jobs:
           xcode-version: latest-stable
       - name: Swift version
         run: swift --version
-      # `swift test` compiles only ZwhisperCore + its tests, not the executable,
+      # `swift test` compiles only ZwispCore + its tests, not the executable,
       # so this stays fast and does not pull in WhisperKit/CoreML.
       - name: Run tests
         run: swift test
