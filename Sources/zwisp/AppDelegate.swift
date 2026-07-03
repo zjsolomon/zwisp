@@ -189,10 +189,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// One dictation's trip through the pipeline: transcribe → clean → inject.
     private func process(samples: [Float], with transcriber: Transcriber,
                          targetPID: pid_t?) async {
+        // Per-stage timings, so "dictation felt slow" is attributable from the
+        // log to transcription vs cleanup (whose own breakdown Ollama reports).
+        let transcribeStart = Date()
         let raw = await transcriber.transcribe(samples)
-        Log.write("raw transcript: '\(raw)'")
+        Log.write(String(format: "raw transcript (%.2fs): '%@'",
+                         Date().timeIntervalSince(transcribeStart), raw))
+        let cleanupStart = Date()
         let text = await cleanup.clean(raw)
-        Log.write("final text: '\(text)'")
+        Log.write(String(format: "final text (%.2fs): '%@'",
+                         Date().timeIntervalSince(cleanupStart), text))
         await finishJob(injecting: text, targetPID: targetPID)
     }
 
@@ -278,6 +284,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.cleanupStatus = status
                 Log.write("cleanup status: \(status)")
                 self.refreshState()
+                // Cleanup just became ready (launch, model change, toggle-on,
+                // Ollama [re]started): pre-load the model and prefill the
+                // system prompt now, so the next dictation's cleanup is warm
+                // instead of paying a multi-second cold start.
+                if case .active = status {
+                    Task { await self.cleanup.warmUp() }
+                }
             }
         }
     }

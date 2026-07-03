@@ -22,7 +22,9 @@ struct CleanupServiceTests {
     /// touch (or depend on) real preferences.
     private func makeService(_ client: HTTPClient, enabled: Bool = true) -> CleanupService {
         let defaults = UserDefaults(suiteName: "zwispTests-\(UUID().uuidString)")!
-        let service = CleanupService(config: Configuration.Cleanup(), httpClient: client, defaults: defaults)
+        // No-op log: tests must not append to the real ~/Library/Logs file.
+        let service = CleanupService(config: Configuration.Cleanup(), httpClient: client,
+                                     defaults: defaults, log: { _ in })
         service.enabled = enabled
         return service
     }
@@ -132,11 +134,73 @@ struct CleanupServiceTests {
         // rather than sent verbatim.
         #expect((object["prompt"] as? String)?.contains("hello there") == true)
         #expect(object["stream"] as? Bool == false)
-        // Guardrails: suppress reasoning, keep the model warm, budget the output.
+        // Guardrails: suppress reasoning, keep the model resident, budget the output.
         #expect(object["think"] as? Bool == false)
-        #expect(object["keep_alive"] as? String == "30m")
+        #expect(object["keep_alive"] as? String == "-1m")
         let options = try #require(object["options"] as? [String: Any])
         #expect(options["num_predict"] as? Int == 100)   // 11 chars × 2, floored at min
+    }
+
+    // MARK: - warmUp()
+
+    @Test func warmupRequestSharesPromptPrefixAndGeneratesOneToken() throws {
+        let config = Configuration.Cleanup(model: "llama3.2:3b", warmupTimeout: 45)
+        let defaults = UserDefaults(suiteName: "zwispTests-\(UUID().uuidString)")!
+        let service = CleanupService(
+            config: config,
+            httpClient: FakeClient(result: .failure(URLError(.badURL))),
+            defaults: defaults
+        )
+
+        let request = service.buildWarmupRequest()
+        #expect(request.httpMethod == "POST")
+        // Cold loads can exceed the dictation timeout; the warm-up gets its own.
+        #expect(request.timeoutInterval == 45)
+
+        let body = try #require(request.httpBody)
+        let object = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        #expect(object["model"] as? String == "llama3.2:3b")
+        #expect(object["system"] as? String == config.systemPrompt)
+        // Same wrapped-prompt shape as a real dictation, so the prefilled KV
+        // cache prefix carries over to real requests.
+        let realPrompt = try #require(CleanupService.wrapPrompt("x").components(separatedBy: "<<<").first)
+        #expect((object["prompt"] as? String)?.hasPrefix(realPrompt) == true)
+        // Side effects only — generate as little as possible.
+        let options = try #require(object["options"] as? [String: Any])
+        #expect(options["num_predict"] as? Int == 1)
+    }
+
+    @Test func warmUpSucceedsAgainstAHealthyServer() async {
+        let service = makeService(FakeClient(result: .success((json("{}"), response(200)))))
+        #expect(await service.warmUp() == true)
+    }
+
+    @Test func warmUpSkipsNetworkWhenDisabled() async {
+        // The 200 response would report success; disabled must not get there.
+        let service = makeService(FakeClient(result: .success((json("{}"), response(200)))), enabled: false)
+        #expect(await service.warmUp() == false)
+    }
+
+    @Test func warmUpReportsFailureWhenOllamaIsDown() async {
+        let service = makeService(FakeClient(result: .failure(URLError(.cannotConnectToHost))))
+        #expect(await service.warmUp() == false)
+    }
+
+    // MARK: - timingSummary()
+
+    @Test func timingSummaryRendersOllamaDurations() {
+        let data = json("""
+        {"response":"Hi.","total_duration":7020000000,"load_duration":5100000000,
+         "prompt_eval_count":1312,"prompt_eval_duration":1520000000,
+         "eval_count":24,"eval_duration":310000000}
+        """)
+        #expect(CleanupService.timingSummary(data: data)
+                == "total 7.02s: load 5.10s, prefill 1312tk 1.52s, generate 24tk 0.31s")
+    }
+
+    @Test func timingSummaryIsNilWithoutTimingFields() {
+        #expect(CleanupService.timingSummary(data: json(#"{"response":"Hi."}"#)) == nil)
+        #expect(CleanupService.timingSummary(data: json("nope")) == nil)
     }
 
     @Test func responseTokenBudgetScalesWithInputAndClamps() {
