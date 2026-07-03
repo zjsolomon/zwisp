@@ -12,6 +12,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var cleanup = CleanupService(config: config.cleanup)
     private var transcriber: Transcriber?
     private var hotkeyMonitor: HotkeyMonitor?
+    /// Eagerly transcribes while the hotkey is held (one worker per recording),
+    /// so release only pays for the unconfirmed tail. Nil when streaming is off.
+    private var streamingWorker: StreamingWorker?
 
     private let hotkeyStore = HotkeyStore()
     private let probe = PermissionProbe()
@@ -80,7 +83,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Load the speech model off the main thread (separately).
         Task {
             do {
-                let t = try await Transcriber(model: config.whisperModel)
+                let t = try await Transcriber(
+                    model: config.whisperModel,
+                    minimumTranscribableSamples: config.audio.minimumTranscribableSamples)
                 await MainActor.run {
                     self.transcriber = t
                     self.modelReady = true
@@ -157,6 +162,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         isRecording = true
         recorder.start()
+        if config.streaming.enabled, let transcriber {
+            let worker = StreamingWorker(recorder: recorder, transcriber: transcriber,
+                                         sampleRate: config.audio.sampleRate,
+                                         config: config.streaming)
+            worker.start()
+            streamingWorker = worker
+        }
         refreshState()
     }
 
@@ -165,9 +177,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard isRecording, let transcriber else { Log.write("(not recording; ignoring)"); return }
         isRecording = false
         let samples = recorder.stop()
+        let worker = streamingWorker
+        streamingWorker = nil
         let seconds = Double(samples.count) / config.audio.sampleRate
         Log.write("captured \(samples.count) samples (\(String(format: "%.2f", seconds))s)")
         guard samples.count > config.audio.minimumSampleCount else {   // stray tap
+            worker?.cancel()
             Log.write("too short; skipping")
             refreshState()
             return
@@ -182,24 +197,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let previous = pipelineTail
         pipelineTail = Task { [weak self] in
             await previous?.value
-            await self?.process(samples: samples, with: transcriber, targetPID: targetPID)
+            await self?.process(samples: samples, with: transcriber, targetPID: targetPID,
+                                worker: worker)
         }
     }
 
     /// One dictation's trip through the pipeline: transcribe → clean → inject.
     private func process(samples: [Float], with transcriber: Transcriber,
-                         targetPID: pid_t?) async {
+                         targetPID: pid_t?, worker: StreamingWorker?) async {
         // Per-stage timings, so "dictation felt slow" is attributable from the
         // log to transcription vs cleanup (whose own breakdown Ollama reports).
         let transcribeStart = Date()
-        let raw = await transcriber.transcribe(samples)
-        Log.write(String(format: "raw transcript (%.2fs): '%@'",
-                         Date().timeIntervalSince(transcribeStart), raw))
+        let result = await transcribe(samples: samples, with: transcriber, worker: worker)
+        let raw = result.text
+        Log.write(String(format: "raw transcript (%.2fs%@): '%@'",
+                         Date().timeIntervalSince(transcribeStart),
+                         result.streamed ? ", streamed" : "", raw))
         let cleanupStart = Date()
         let text = await cleanup.clean(raw)
         Log.write(String(format: "final text (%.2fs): '%@'",
                          Date().timeIntervalSince(cleanupStart), text))
         await finishJob(injecting: text, targetPID: targetPID)
+    }
+
+    /// Streamed transcription when the worker confirmed audio during the hold
+    /// (release pays only for the unconfirmed tail); the plain batch pass
+    /// otherwise — including whenever anything about streaming went wrong, so
+    /// dictation reliability never depends on it.
+    private func transcribe(samples: [Float], with transcriber: Transcriber,
+                            worker: StreamingWorker?) async -> (text: String, streamed: Bool) {
+        if let worker, let transcript = await worker.finish(), transcript.hasConfirmedAudio {
+            do {
+                let tail = try await transcriber.segments(
+                    for: samples, fromSeconds: transcript.clipStartSeconds)
+                return (transcript.finalText(finalPassSegments: tail), true)
+            } catch {
+                Log.write("final streaming pass failed (\(error)); using batch")
+            }
+        }
+        return (await transcriber.transcribe(samples), false)
     }
 
     /// Waits for the user's hands to be still, checks focus hasn't moved, then
