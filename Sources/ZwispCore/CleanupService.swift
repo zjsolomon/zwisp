@@ -8,6 +8,14 @@ public protocol HTTPClient {
 
 extension URLSession: HTTPClient {}
 
+/// Where the cleanup pass currently stands — drives the menu-bar colour
+/// (blue when cleanup will actually run, green when dictation is raw-only).
+public enum CleanupStatus: Equatable {
+    case active(model: String)  // enabled, Ollama reachable, selected model installed
+    case unavailable            // enabled, but Ollama is down or the model is missing
+    case off                    // user turned cleanup off
+}
+
 /// Optional LLM "cleanup" pass that turns a raw speech transcript into clean
 /// written text (punctuation, capitalization, removing filler words and false
 /// starts). Runs fully locally against an Ollama server on localhost.
@@ -71,6 +79,17 @@ public final class CleanupService {
             NSLog("zwisp: cleanup unavailable (\(error.localizedDescription)); using raw text")
             return text
         }
+    }
+
+    /// Derives the current `CleanupStatus`. `.off` is decided without touching
+    /// the network; otherwise one cheap `/api/tags` call to localhost settles
+    /// `.active` vs `.unavailable`.
+    public func status() async -> CleanupStatus {
+        guard enabled else { return .off }
+        guard let models = await availableModels(), models.contains(model) else {
+            return .unavailable
+        }
+        return .active(model: model)
     }
 
     /// Asks Ollama which models are installed (`/api/tags`), for the model

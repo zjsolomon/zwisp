@@ -19,9 +19,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let hotkeysMenu = NSMenu(title: "Hotkeys")
     private let cleanupMenu = NSMenu(title: "AI Cleanup")
 
-    // Two independent readiness signals; the menu-bar state is derived from both.
+    // Independent readiness signals; the menu-bar state is derived from them.
     private var monitorActive = false
     private var modelReady = false
+    /// Last observed cleanup readiness (blue vs green icon). Re-derived at
+    /// launch, on toggle/model change, after each dictation, and on a poll —
+    /// `.off` and `.unavailable` render the same green, so the placeholder
+    /// value never flashes a wrong colour while the first check runs.
+    private var cleanupStatus = CleanupStatus.off
+    private var cleanupPollTimer: Timer?
     // Recording (mic open) and processing (transcribe/clean/inject) are
     // deliberately SEPARATE state: a new dictation may start while previous
     // ones are still in the pipeline, so one shared "busy" flag corrupts both.
@@ -52,6 +58,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Log.write("hotkeys: \(hotkeyStore.hotkeys.map(\.name).joined(separator: ", "))")
         startHotkeyMonitor()
         refreshState()
+        refreshCleanupStatus()
+        // Track Ollama coming and going while we're idle (cheap localhost
+        // call), so the blue/green icon doesn't go stale.
+        cleanupPollTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            self?.refreshCleanupStatus()
+        }
 
         // Load the speech model off the main thread (separately).
         Task {
@@ -163,6 +175,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         defer {
             jobsInFlight -= 1
             refreshState()
+            // The dictation just exercised Ollama; sync the blue/green icon.
+            refreshCleanupStatus()
         }
         guard !text.isEmpty else {
             Log.write("empty result; nothing injected")
@@ -216,7 +230,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else if jobsInFlight > 0 {
             setState(.thinking)
         } else {
-            setState(.resting(monitorActive: monitorActive, modelReady: modelReady))
+            setState(.resting(monitorActive: monitorActive, modelReady: modelReady,
+                              cleanup: cleanupStatus))
+        }
+    }
+
+    /// Re-derives the cleanup status off the main thread and re-tints the icon
+    /// if it changed.
+    private func refreshCleanupStatus() {
+        Task { [weak self] in
+            guard let self else { return }
+            let status = await self.cleanup.status()
+            await MainActor.run {
+                guard status != self.cleanupStatus else { return }
+                self.cleanupStatus = status
+                Log.write("cleanup status: \(status)")
+                self.refreshState()
+            }
         }
     }
 
@@ -329,6 +359,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func selectCleanupModel(_ sender: NSMenuItem) {
         cleanup.model = sender.title
         Log.write("cleanup model set to \(sender.title)")
+        refreshCleanupStatus()
     }
 
     /// User clicked "Ollama isn't running — click to start". Try, in order:
@@ -336,6 +367,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// the CLI (`ollama serve`, detached so it outlives zwisp), and finally
     /// the download page for people who don't have Ollama at all.
     @objc private func startOllama() {
+        // The server takes a moment to boot; re-check the icon soon after
+        // instead of waiting for the 30 s poll.
+        for delay in [3.0, 8.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.refreshCleanupStatus()
+            }
+        }
         let appURL = ["com.ollama.ollama", "com.electron.ollama"]
             .compactMap { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) }
             .first
@@ -374,6 +412,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func toggleCleanup(_ sender: NSMenuItem) {
         cleanup.enabled.toggle()
         sender.state = cleanup.enabled ? .on : .off
+        refreshCleanupStatus()
     }
 
     @objc private func toggleLaunchAtLogin(_ sender: NSMenuItem) {

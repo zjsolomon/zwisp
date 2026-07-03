@@ -83,6 +83,33 @@ struct CleanupServiceTests {
         #expect(await service.clean("raw dictation") == "raw dictation")
     }
 
+    // MARK: - status()
+
+    @Test func statusIsOffWhenDisabledWithoutTouchingTheNetwork() async {
+        // The client would throw if invoked; a disabled service must not call it.
+        let service = makeService(FakeClient(result: .failure(URLError(.badURL))), enabled: false)
+        #expect(await service.status() == .off)
+    }
+
+    @Test func statusIsActiveWhenSelectedModelInstalled() async {
+        let data = json(#"{"models":[{"name":"qwen3:4b-instruct"},{"name":"other:1b"}]}"#)
+        let service = makeService(FakeClient(result: .success((data, response(200)))))
+        service.model = "qwen3:4b-instruct"
+        #expect(await service.status() == .active(model: "qwen3:4b-instruct"))
+    }
+
+    @Test func statusIsUnavailableWhenOllamaIsDown() async {
+        let service = makeService(FakeClient(result: .failure(URLError(.cannotConnectToHost))))
+        #expect(await service.status() == .unavailable)
+    }
+
+    @Test func statusIsUnavailableWhenSelectedModelIsMissing() async {
+        let data = json(#"{"models":[{"name":"other:1b"}]}"#)
+        let service = makeService(FakeClient(result: .success((data, response(200)))))
+        service.model = "qwen3:4b-instruct"
+        #expect(await service.status() == .unavailable)
+    }
+
     // MARK: - buildRequest()
 
     @Test func buildRequestEncodesModelPromptAndHeaders() throws {

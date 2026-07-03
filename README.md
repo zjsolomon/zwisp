@@ -34,7 +34,7 @@ permissions — see [First-run setup](#first-run-setup-one-time).
 
 ```
 key held  ──►  record mic (16 kHz)  ──►  release  ──►  WhisperKit (on-device)  ──►  types text
-            menu bar:  🎙️ idle   🔴 recording   💭 thinking
+       menu bar:  🔴 warming up   🟢 ready   🔵 ready + AI cleanup
 ```
 
 ## Features
@@ -100,6 +100,21 @@ afterwards it runs fully offline.
   (logged in `~/Library/Logs/zwisp.log`).
 - Click the menu-bar icon for hotkey settings, permission shortcuts, AI cleanup
   (on/off and model choice), Launch at Login, and Quit.
+
+### What the icon colours mean
+
+| Icon | Meaning |
+|---|---|
+| 🔴 Red | Warming up — the speech model is still loading (a few seconds after launch). Dictation is ignored until this clears. |
+| 🟢 Green | Ready to dictate. AI cleanup is off or unavailable, so you get the raw transcript. |
+| 🔵 Blue | Ready to dictate, and AI cleanup is active — transcripts get cleaned up by your Ollama model. |
+| ⚪ Grey | Transcribing a dictation you just finished. |
+| 🟠 Orange | Permissions missing — see [First-run setup](#first-run-setup-one-time). |
+
+While you're recording, zwisp's own icon doesn't change: macOS shows its
+orange microphone indicator in the menu bar whenever the mic is live, and
+that's the recording signal. Hovering the zwisp icon shows the current state
+in words.
 
 ### Changing hotkeys
 
