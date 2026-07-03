@@ -75,7 +75,8 @@ separate privacy permissions. Grant these once:
 
 1. **Microphone** — macOS prompts on first launch. Click **Allow**.
 2. **Input Monitoring** — System Settings → Privacy & Security → **Input
-   Monitoring** → enable **Zwhisper**. Required to detect the `Fn` key globally.
+   Monitoring** → enable **Zwhisper**. Required to detect your push-to-talk key
+   globally.
 3. **Accessibility** — System Settings → Privacy & Security → **Accessibility** →
    enable **Zwhisper**. Required to type the transcribed text into other apps.
 
@@ -239,7 +240,8 @@ release build on every push and pull request.
 
 ## Limitations
 
-- Transcription runs **after** you release `Fn` (batch, not live streaming).
+- Transcription runs **after** you release the push-to-talk key (batch, not
+  live streaming).
   WhisperKit supports streaming if you'd like to add lower-latency output.
 - The app is ad-hoc / self-signed, so permissions are tied to a specific build;
   rebuilding may occasionally require re-granting Accessibility. See
