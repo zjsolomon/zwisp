@@ -11,9 +11,14 @@ to a server, and no account is required. The only network access is a one-time
 download of the speech model.
 
 [![CI](https://github.com/zjsolomon/Zwhisper/actions/workflows/ci.yml/badge.svg)](https://github.com/zjsolomon/Zwhisper/actions/workflows/ci.yml)
+![Status](https://img.shields.io/badge/status-beta-yellow)
 ![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-blue)
 ![Swift](https://img.shields.io/badge/swift-5.9%2B-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
+
+> **Beta.** Zwhisper works for day-to-day dictation, but it's young: expect
+> rough edges, and defaults or behaviour may still change between versions.
+> [Bug reports](https://github.com/zjsolomon/Zwhisper/issues) are very welcome.
 
 Zwhisper is an open-source, local-first alternative to hosted dictation tools
 such as Wispr Flow. It provides the same hold-a-key-anywhere workflow, but
