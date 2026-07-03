@@ -39,6 +39,10 @@ public final class CleanupService {
     private let config: Configuration.Cleanup
     private let httpClient: HTTPClient
     private let defaults: UserDefaults
+    /// Injectable so unit tests don't append to the real ~/Library/Logs file —
+    /// it doubles as the dictation-latency diagnostic, so stray test lines
+    /// ("warm-up failed") would corrupt what it exists to answer.
+    private let log: (String) -> Void
 
     static let enabledKey = "cleanupEnabled"
     static let modelKey = "cleanupModel"
@@ -50,10 +54,12 @@ public final class CleanupService {
 
     /// Testable initializer: inject a fake `HTTPClient` and an isolated
     /// `UserDefaults` suite.
-    init(config: Configuration.Cleanup, httpClient: HTTPClient, defaults: UserDefaults) {
+    init(config: Configuration.Cleanup, httpClient: HTTPClient, defaults: UserDefaults,
+         log: @escaping (String) -> Void = Log.write) {
         self.config = config
         self.httpClient = httpClient
         self.defaults = defaults
+        self.log = log
         // Default ON; respect a previously saved choice.
         if defaults.object(forKey: Self.enabledKey) == nil {
             self.enabled = true
@@ -69,16 +75,41 @@ public final class CleanupService {
         guard enabled, !text.isEmpty else { return text }
         do {
             let (data, response) = try await httpClient.data(for: buildRequest(for: text))
+            if let timings = Self.timingSummary(data: data) {
+                log("cleanup \(timings)")
+            }
             guard let parsed = Self.parse(data: data, response: response) else { return text }
             guard let cleaned = Self.sanitize(parsed, raw: text) else {
-                NSLog("zwisp: cleanup output failed sanity checks; using raw text")
+                log("cleanup output failed sanity checks; using raw text")
                 return text
             }
             return cleaned
         } catch {
-            NSLog("zwisp: cleanup unavailable (\(error.localizedDescription)); using raw text")
+            log("cleanup unavailable (\(error.localizedDescription)); using raw text")
             return text
         }
+    }
+
+    /// Pays the cleanup cold start deliberately, ahead of any dictation: loads
+    /// the model into Ollama's memory and computes the KV cache for the long,
+    /// request-invariant system prompt. Without this, the first cleanup after
+    /// launch or a model change costs several seconds — enough to blow
+    /// `clean`'s timeout and silently degrade to the raw transcript. Returns
+    /// whether the model is now warm.
+    @discardableResult
+    public func warmUp() async -> Bool {
+        guard enabled else { return false }
+        let start = Date()
+        guard let (data, response) = try? await httpClient.data(for: buildWarmupRequest()),
+              (response as? HTTPURLResponse)?.statusCode == 200
+        else {
+            log("cleanup warm-up failed; the next dictation may pay the cold start")
+            return false
+        }
+        let elapsed = Date().timeIntervalSince(start)
+        let detail = Self.timingSummary(data: data).map { " (\($0))" } ?? ""
+        log(String(format: "cleanup model warmed in %.2fs%@", elapsed, detail))
+        return true
     }
 
     /// Derives the current `CleanupStatus`. `.off` is decided without touching
@@ -104,15 +135,37 @@ public final class CleanupService {
     /// Builds the Ollama `/api/generate` request for `text`. Internal so tests
     /// can assert the body without sending it.
     func buildRequest(for text: String) -> URLRequest {
+        makeGenerateRequest(
+            prompt: Self.wrapPrompt(text),
+            // Cleanup output is about the size of its input; a hard token
+            // budget cuts off a runaway generation at the source.
+            numPredict: responseTokenBudget(for: text),
+            timeout: config.timeout)
+    }
+
+    /// The warm-up request: a one-token generation whose only purpose is its
+    /// side effects (model load + system-prompt prefill). It goes through
+    /// `wrapPrompt` like a real dictation so the rendered prompt shares its
+    /// whole instruction prefix with real requests and the KV cache carries
+    /// over. Generous timeout — a cold load may exceed `config.timeout`.
+    func buildWarmupRequest() -> URLRequest {
+        makeGenerateRequest(
+            prompt: Self.wrapPrompt("Ready."),
+            numPredict: 1,
+            timeout: config.warmupTimeout)
+    }
+
+    private func makeGenerateRequest(prompt: String, numPredict: Int,
+                                     timeout: TimeInterval) -> URLRequest {
         var request = URLRequest(url: config.endpoint)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = config.timeout
+        request.timeoutInterval = timeout
 
         let body: [String: Any] = [
             "model": model,
             "system": config.systemPrompt,
-            "prompt": Self.wrapPrompt(text),
+            "prompt": prompt,
             "stream": false,
             // Reasoning models (qwen3, deepseek-r1, …) would otherwise think
             // out loud for seconds before — or instead of — cleaning the text.
@@ -121,9 +174,7 @@ public final class CleanupService {
             "keep_alive": config.keepAlive,
             "options": [
                 "temperature": config.temperature,
-                // Cleanup output is about the size of its input; a hard token
-                // budget cuts off a runaway generation at the source.
-                "num_predict": responseTokenBudget(for: text)
+                "num_predict": numPredict
             ]
         ]
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
@@ -167,6 +218,28 @@ public final class CleanupService {
             return nil
         }
         return cleaned
+    }
+
+    /// Compact rendering of the timing fields Ollama attaches to every
+    /// generate response (nanosecond integers), or `nil` when absent. Splits a
+    /// slow cleanup into its actual causes — model load vs prompt prefill vs
+    /// token generation — so "cleanup is slow" is diagnosable from the log.
+    static func timingSummary(data: Data) -> String? {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let total = (object["total_duration"] as? NSNumber)?.doubleValue
+        else { return nil }
+        func seconds(_ key: String) -> Double {
+            ((object[key] as? NSNumber)?.doubleValue ?? 0) / 1e9
+        }
+        func tokens(_ key: String) -> Int {
+            (object[key] as? NSNumber)?.intValue ?? 0
+        }
+        return String(
+            format: "total %.2fs: load %.2fs, prefill %dtk %.2fs, generate %dtk %.2fs",
+            total / 1e9,
+            seconds("load_duration"),
+            tokens("prompt_eval_count"), seconds("prompt_eval_duration"),
+            tokens("eval_count"), seconds("eval_duration"))
     }
 
     /// Extracts installed model names from an Ollama `/api/tags` response.

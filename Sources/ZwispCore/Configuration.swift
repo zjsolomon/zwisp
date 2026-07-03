@@ -44,9 +44,15 @@ public struct Configuration {
         public var temperature: Double
         public var timeout: TimeInterval
         public var systemPrompt: String
-        /// How long Ollama keeps the model in memory after a request. Keeping it
-        /// warm means the next dictation doesn't pay the model-load penalty.
+        /// How long Ollama keeps the model in memory after a request. A negative
+        /// duration means "never unload": the cold start (model load + system
+        /// prompt prefill) costs several seconds and can blow `timeout`, so a
+        /// resident model (~2–3 GB for a 4B) is the price of instant cleanup.
         public var keepAlive: String
+        /// Timeout for the warm-up request (`CleanupService.warmUp`), which pays
+        /// the cold start deliberately so dictations don't. Nothing user-facing
+        /// waits on it, so it can be generous.
+        public var warmupTimeout: TimeInterval
         /// Response-length budget: the model may generate at most
         /// `input character count × multiplier` tokens, clamped to
         /// [minResponseTokens, maxResponseTokens]. Cleanup output should be about
@@ -67,7 +73,8 @@ public struct Configuration {
             // beyond it, the raw transcript is typed instead.
             timeout: TimeInterval = 8,
             systemPrompt: String = Cleanup.defaultSystemPrompt,
-            keepAlive: String = "30m",
+            keepAlive: String = "-1m",
+            warmupTimeout: TimeInterval = 60,
             minResponseTokens: Int = 100,
             maxResponseTokens: Int = 2_048,
             responseTokenMultiplier: Int = 2
@@ -78,6 +85,7 @@ public struct Configuration {
             self.timeout = timeout
             self.systemPrompt = systemPrompt
             self.keepAlive = keepAlive
+            self.warmupTimeout = warmupTimeout
             self.minResponseTokens = minResponseTokens
             self.maxResponseTokens = maxResponseTokens
             self.responseTokenMultiplier = responseTokenMultiplier
