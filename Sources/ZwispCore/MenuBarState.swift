@@ -41,7 +41,9 @@ public enum MenuBarState: Equatable {
         case .thinking:
             return "Transcribing…"
         case .noPermission(let missing):
-            guard !missing.isEmpty else { return "Needs permissions — open Setup Guide in this menu" }
+            // Empty list = the hotkey listener is down but no permission is
+            // known-missing (e.g. transient tap failure) — don't claim one is.
+            guard !missing.isEmpty else { return "Hotkey listener not running — see Setup Guide in this menu" }
             let noun = missing.count == 1 ? "permission" : "permissions"
             return "Needs \(noun): \(missing.joined(separator: ", "))"
         }

@@ -17,7 +17,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let probe = PermissionProbe()
     private lazy var onboarding = OnboardingWindow(
         probe: probe, hotkeyStore: hotkeyStore,
-        isModelReady: { [weak self] in self?.modelReady ?? false })
+        isModelReady: { [weak self] in self?.modelReady ?? false },
+        onPermissionsGranted: { [weak self] in
+            // Re-arm the tap the moment the last grant lands, instead of
+            // waiting out the 2 s retry poll — so the window's "You're
+            // ready" is true by the time the user reads it.
+            self?.startHotkeyMonitor()
+            self?.refreshState()
+        })
     private let capturePanel = HotkeyCapturePanel()
     private let hotkeysMenu = NSMenu(title: "Hotkeys")
     private let cleanupMenu = NSMenu(title: "AI Cleanup")
@@ -134,11 +141,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard modelReady, transcriber != nil, !isRecording else { return }
         // Mic permission is user-initiated, not prompted at launch: if it was
         // never asked (setup window closed early), ask now — recording
-        // proceeds on the next attempt once granted.
-        guard PermissionProbe.microphoneStatus() != .notGranted else {
+        // proceeds on the next attempt once granted. A denied mic would
+        // "record" silence, so reopen the setup guide instead of failing mute.
+        switch PermissionProbe.microphoneStatus() {
+        case .notGranted:
             Log.write("microphone not yet requested; firing the system prompt")
             probe.requestMicAccess()
             return
+        case .denied:
+            Log.write("microphone access denied; showing setup guide")
+            onboarding.present()
+            return
+        case .granted:
+            break
         }
         isRecording = true
         recorder.start()
@@ -243,9 +258,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else if jobsInFlight > 0 {
             setState(.thinking)
         } else {
+            // Probe only when the monitor is down — resting() ignores the
+            // names otherwise, and the probe is three TCC round-trips on the
+            // main thread in the middle of the dictation path.
+            let missing = monitorActive ? [] : probe.state().missingHotkeyPermissionNames
             setState(.resting(monitorActive: monitorActive, modelReady: modelReady,
-                              cleanup: cleanupStatus,
-                              missingPermissions: probe.state().missingHotkeyPermissionNames))
+                              cleanup: cleanupStatus, missingPermissions: missing))
         }
     }
 
@@ -505,11 +523,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return image
     }
 
-    @objc private func openAccessibility() { probe.openAccessibilitySettings() }
+    // The deep links alone don't put zwisp in the Settings lists — the request
+    // calls do (and are silent no-ops once the status is decided). Fire both,
+    // so the pane the user lands on actually has a zwisp row to enable.
 
-    @objc private func openInputMonitoring() { probe.openInputMonitoringSettings() }
+    @objc private func openAccessibility() {
+        probe.promptAccessibility()
+        probe.openAccessibilitySettings()
+    }
 
-    @objc private func openMicrophone() { probe.openMicrophoneSettings() }
+    @objc private func openInputMonitoring() {
+        probe.requestInputMonitoring()
+        probe.openInputMonitoringSettings()
+    }
+
+    @objc private func openMicrophone() {
+        probe.requestMicAccess()
+        probe.openMicrophoneSettings()
+    }
 
     @objc private func showOnboarding() { onboarding.present() }
 }

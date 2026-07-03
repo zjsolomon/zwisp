@@ -65,6 +65,14 @@ struct OnboardingStateTests {
         }
     }
 
+    @Test func readyMessageNamesTheConfiguredHotkeys() {
+        #expect(OnboardingState.readyMessage(hotkeyNames: ["Right ⌘"]).contains("Right ⌘"))
+        #expect(OnboardingState.readyMessage(hotkeyNames: ["Right ⌘", "Fn 🌐"])
+            .contains("Right ⌘ or Fn 🌐"))
+        // No hotkeys configured → point at the Hotkeys menu, not a key.
+        #expect(OnboardingState.readyMessage(hotkeyNames: []).contains("Hotkeys"))
+    }
+
     @Test func everyPermissionHasDisplayCopy() {
         for permission in OnboardingPermission.allCases {
             #expect(!permission.title.isEmpty)

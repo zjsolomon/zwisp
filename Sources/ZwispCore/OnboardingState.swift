@@ -89,4 +89,13 @@ public struct OnboardingState: Equatable {
         if accessibility != .granted { names.append(OnboardingPermission.accessibility.title) }
         return names
     }
+
+    /// The setup window's footer line once everything is granted, given the
+    /// user's configured hotkey names.
+    public static func readyMessage(hotkeyNames: [String]) -> String {
+        guard !hotkeyNames.isEmpty else {
+            return "🎉 All set! Add a push-to-talk key via the menu-bar icon → Hotkeys."
+        }
+        return "🎉 You're ready! Hold \(hotkeyNames.joined(separator: " or ")), speak, release."
+    }
 }

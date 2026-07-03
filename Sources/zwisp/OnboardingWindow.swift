@@ -9,6 +9,7 @@ final class OnboardingWindow {
     private let probe: PermissionProbe
     private let hotkeyStore: HotkeyStore
     private let isModelReady: () -> Bool
+    private let onPermissionsGranted: () -> Void
 
     private var window: NSWindow?
     private var refreshTimer: Timer?
@@ -16,12 +17,15 @@ final class OnboardingWindow {
     private var footerStack: NSStackView!
     private var readyLabel: NSTextField!
     private var modelStatusLabel: NSTextField!
+    private var wasAllGranted = false
 
     init(probe: PermissionProbe, hotkeyStore: HotkeyStore,
-         isModelReady: @escaping () -> Bool) {
+         isModelReady: @escaping () -> Bool,
+         onPermissionsGranted: @escaping () -> Void) {
         self.probe = probe
         self.hotkeyStore = hotkeyStore
         self.isModelReady = isModelReady
+        self.onPermissionsGranted = onPermissionsGranted
     }
 
     func present() {
@@ -46,9 +50,13 @@ final class OnboardingWindow {
     /// makes rows flip to ✓ moments after the user grants in System Settings.
     private func startRefreshTimer() {
         stopRefreshTimer()
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
             self?.refresh()
         }
+        // .common so the checklist keeps updating during menu tracking —
+        // the default mode suspends timers while a menu is open.
+        RunLoop.main.add(timer, forMode: .common)
+        refreshTimer = timer
     }
 
     private func stopRefreshTimer() {
@@ -69,21 +77,22 @@ final class OnboardingWindow {
             row.button.isEnabled = !granted
         }
 
-        footerStack.isHidden = !state.allGranted
-        if state.allGranted {
-            readyLabel.stringValue = readyMessage()
+        let allGranted = state.allGranted
+        if allGranted && !wasAllGranted {
+            // Let the app re-arm the hotkey tap immediately, so the ready
+            // message below is true by the time it's read.
+            onPermissionsGranted()
+        }
+        wasAllGranted = allGranted
+
+        footerStack.isHidden = !allGranted
+        if allGranted {
+            readyLabel.stringValue = OnboardingState.readyMessage(
+                hotkeyNames: hotkeyStore.hotkeys.map(\.name))
             modelStatusLabel.stringValue = isModelReady()
                 ? "Speech model ready — go ahead."
                 : "Speech model still loading… the menu-bar icon turns green when it's ready."
         }
-    }
-
-    private func readyMessage() -> String {
-        let names = hotkeyStore.hotkeys.map(\.name)
-        guard !names.isEmpty else {
-            return "🎉 All set! Add a push-to-talk key via the menu-bar icon → Hotkeys."
-        }
-        return "🎉 You're ready! Hold \(names.joined(separator: " or ")), speak, release."
     }
 
     // MARK: - Row actions
@@ -231,11 +240,5 @@ final class OnboardingWindow {
     }
 
     // Closing via the red button must also stop the 1 s poll.
-    private lazy var closeDelegate = CloseDelegate { [weak self] in self?.stopRefreshTimer() }
-
-    private final class CloseDelegate: NSObject, NSWindowDelegate {
-        private let onClose: () -> Void
-        init(onClose: @escaping () -> Void) { self.onClose = onClose }
-        func windowWillClose(_ notification: Notification) { onClose() }
-    }
+    private lazy var closeDelegate = WindowCloseDelegate { [weak self] in self?.stopRefreshTimer() }
 }
