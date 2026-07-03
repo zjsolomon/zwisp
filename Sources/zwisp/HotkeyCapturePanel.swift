@@ -69,11 +69,5 @@ final class HotkeyCapturePanel {
     }
 
     // Treat closing the window (red button) the same as Cancel.
-    private lazy var windowDelegate = CloseDelegate { [weak self] in self?.cancelClicked() }
-
-    private final class CloseDelegate: NSObject, NSWindowDelegate {
-        private let onClose: () -> Void
-        init(onClose: @escaping () -> Void) { self.onClose = onClose }
-        func windowWillClose(_ notification: Notification) { onClose() }
-    }
+    private lazy var windowDelegate = WindowCloseDelegate { [weak self] in self?.cancelClicked() }
 }

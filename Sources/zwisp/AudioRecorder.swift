@@ -23,12 +23,6 @@ final class AudioRecorder {
         )!
     }
 
-    func requestPermission() {
-        AVCaptureDevice.requestAccess(for: .audio) { granted in
-            if !granted { NSLog("zwisp: microphone permission denied") }
-        }
-    }
-
     func start() {
         guard !isRunning else { return }
         lock.lock()
