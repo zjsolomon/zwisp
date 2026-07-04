@@ -102,7 +102,13 @@ covered by CI. The app layer should stay a thin glue layer.
   are deliberately conservative (short entries never fuzzy-match) — a wrong "correction" is
   worse than a missed one. Words are added via a macOS Service (`NSServices` in Info.plist +
   `ServicesProvider`); macOS caches Service registrations, so after editing that plist block
-  run `/System/Library/CoreServices/pbs -flush` and relaunch.
+  run `/System/Library/CoreServices/pbs -flush` and relaunch. `install.sh` enables the
+  Service and assigns its ⌃⌥⇧⌘Z shortcut by writing the `pbs NSServicesStatus` default
+  (skipped if an entry exists, so user customisations survive reinstalls) — keep the hint
+  copy in `rebuildDictionaryMenu`, README, and install.sh in sync if the shortcut changes.
+  All four modifiers on purpose: macOS Sequoia's window tiling claimed most ⌃⌥⌘ combos
+  (⌃⌥⌘Z zooms the window in e.g. Notes) and Services shortcuts can't tell left from right
+  modifiers, so the "hyper" chord is the only reliably unclaimed space.
 - WhisperKit downloads the model from Hugging Face on first use (internet once), then runs
   offline. Transcription is **streamed while the key is held**: `StreamingWorker` re-transcribes
   the growing buffer (~1 s cadence) with `clipTimestamps` skipping confirmed audio, and
