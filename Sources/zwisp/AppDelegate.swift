@@ -18,13 +18,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let hotkeyStore = HotkeyStore()
     private lazy var dictionaryStore = DictionaryStore(config: config.dictionary)
-    /// Receives "Add to zwisp Dictionary" Service invocations (selected text in
-    /// any app); registered as `NSApp.servicesProvider` at launch.
-    private lazy var servicesProvider = ServicesProvider(dictionary: dictionaryStore) {
-        [weak self] entry in
-        Log.write("dictionary: added '\(entry)' via Services")
-        self?.rewarmCleanupAfterDictionaryChange()
-    }
     private let probe = PermissionProbe()
     private lazy var onboarding = OnboardingWindow(
         probe: probe, hotkeyStore: hotkeyStore,
@@ -68,11 +61,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Personal dictionary: rendered into the cleanup system prompt (wired
         // before the first status refresh below, so the initial warm-up
-        // prefills the dictionary-bearing prompt) and fed by the "Add to zwisp
-        // Dictionary" Service on selected text in any app.
+        // prefills the dictionary-bearing prompt). Edited from the Dictionary
+        // menu — a macOS Service was tried and abandoned: registration looked
+        // correct in pbs but the item never surfaced in Services menus.
         cleanup.dictionaryProvider = { [weak self] in self?.dictionaryStore.entries ?? [] }
-        NSApp.servicesProvider = servicesProvider
-        NSUpdateDynamicServices()
         Log.write("dictionary: \(dictionaryStore.entries.count) entries")
 
         // No permission prompts at launch — the onboarding window owns them,
@@ -502,11 +494,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         dictionaryMenu.addItem(.separator())
-        let hint = NSMenuItem(
-            title: "Add: select a word in any app, press ⌃⌥⇧⌘Z (or right-click → Services)",
-            action: nil, keyEquivalent: "")
-        hint.isEnabled = false
-        dictionaryMenu.addItem(hint)
+        let add = NSMenuItem(title: "Add Word…", action: #selector(addDictionaryWordClicked),
+                             keyEquivalent: "")
+        add.target = self
+        dictionaryMenu.addItem(add)
+    }
+
+    /// A minimal modal prompt for a new dictionary entry. (A system-wide
+    /// right-click Service was tried first and abandoned — see README.)
+    @objc private func addDictionaryWordClicked() {
+        NSApp.activate(ignoringOtherApps: true)  // accessory app: unfront alerts get lost
+        let alert = NSAlert()
+        alert.messageText = "Add to zwisp's dictionary"
+        alert.informativeText = "Type a name or term exactly as it should be spelled "
+            + "(up to \(config.dictionary.maxEntryWords) words). Dictations that sound "
+            + "like it will use this spelling."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        field.placeholderString = "e.g. WhisperKit"
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        alert.addButton(withTitle: "Add")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        switch dictionaryStore.add(field.stringValue) {
+        case .added, .updated:
+            Log.write("dictionary: added '\(field.stringValue)' via menu")
+            rewarmCleanupAfterDictionaryChange()
+        case .duplicate:
+            break  // already known — nothing to do
+        case .rejected:
+            let oops = NSAlert()
+            oops.alertStyle = .warning
+            oops.messageText = "Couldn't add that"
+            oops.informativeText = "Dictionary entries are short terms: at most "
+                + "\(config.dictionary.maxEntryWords) words and "
+                + "\(config.dictionary.maxEntryLength) characters."
+            oops.runModal()
+        }
     }
 
     @objc private func removeDictionaryEntry(_ sender: NSMenuItem) {

@@ -48,9 +48,8 @@ key held  ──►  record mic (16 kHz)  ──►  release  ──►  Whisper
   and fix punctuation — still fully offline, with guardrails so a bad model
   response never replaces your words.
 - **Personal dictionary** — teach zwisp names and terms it keeps mishearing
-  ("Zied", "WhisperKit"): select the correct spelling in any app, right-click →
-  **Services** → **Add to zwisp Dictionary**. Future dictations use your exact
-  spelling.
+  ("Zied", "WhisperKit") via the menu-bar **Dictionary** menu. Future
+  dictations use your exact spelling.
 - **Lives in the menu bar** — no Dock icon and no windows. Can launch at login.
 - **Small codebase** — a compact, dependency-light Swift project that is
   straightforward to read and audit.
@@ -145,20 +144,9 @@ modifiers are distinct, so you can bind Right ⌘ without affecting Left ⌘.
 Whisper spells names it has never seen however it pleases. When a dictation
 comes out with "zeed" instead of "Zied":
 
-- **Add a word** — select the *correct* spelling anywhere (a document, a chat,
-  a browser) and press **⌃⌥⇧⌘Z** (all four modifiers — the only chord macOS
-  and mainstream apps leave alone; Sequoia's window tiling owns most ⌃⌥⌘
-  combos), or right-click it → **Services** → **Add to zwisp Dictionary**.
-  (macOS puts Services in that submenu — third-party apps can't add top-level
-  items to other apps' right-click menus, so the shortcut is the fast path.)
-  `install.sh` sets the shortcut up; change it any time in System Settings →
-  Keyboard → Keyboard Shortcuts → Services → Text.
-- **If the item doesn't appear** right after installing: macOS caches the
-  Services registry. Check System Settings → Keyboard → Keyboard Shortcuts →
-  Services → Text and make sure **Add to zwisp Dictionary** is listed and
-  ticked, run `/System/Library/CoreServices/pbs -flush`, and re-open the app
-  you're right-clicking in (log out and back in as a last resort).
-- **Review / remove** — menu-bar icon → **Dictionary** lists your words; click
+- **Add a word** — menu-bar icon → **Dictionary** → **Add Word…**, and type
+  the spelling you want (up to 4 words, e.g. a full name).
+- **Review / remove** — the same **Dictionary** menu lists your words; click
   one to remove it.
 
 Dictionary words steer dictations two ways: the AI cleanup model is told your
