@@ -37,7 +37,7 @@ public struct Configuration {
     /// Optional local-LLM cleanup pass (Ollama).
     public struct Cleanup {
         public var endpoint: URL
-        /// Any small instruct model pulled in Ollama, e.g. `ollama pull llama3.2:3b`.
+        /// Any small instruct model pulled in Ollama, e.g. `ollama pull qwen3:4b-instruct`.
         /// This is the *default*; the user's pick (persisted by `CleanupService`)
         /// overrides it.
         public var model: String
@@ -58,7 +58,7 @@ public struct Configuration {
 
         public init(
             endpoint: URL = URL(string: "http://127.0.0.1:11434/api/generate")!,
-            model: String = "llama3.2:3b",
+            model: String = "qwen3:4b-instruct",
             // Near-greedy: transcription editing has one right answer; sampling
             // freedom only invites paraphrase.
             temperature: Double = 0.1,

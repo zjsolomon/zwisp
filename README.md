@@ -143,7 +143,7 @@ local:
 ```bash
 brew install ollama        # or download from ollama.com
 ollama serve               # start the local server (also runs as a login service)
-ollama pull llama3.2:3b    # ~2 GB, one time
+ollama pull qwen3:4b-instruct    # ~2.5 GB, one time
 ```
 
 If Ollama is installed but not running, the menu shows **"Ollama isn't running —
@@ -161,8 +161,8 @@ median per-dictation latency):
 
 | Model | Size | Median | Notes |
 |---|---|---|---|
-| `qwen3:4b-instruct` | 2.5 GB | ~0.7 s | **Recommended.** Best punctuation and fidelity; question marks and commas consistently right. |
-| `llama3.2:3b` | 2.0 GB | ~0.5 s | Default. Fastest; occasional comma/question-mark slips. |
+| `qwen3:4b-instruct` | 2.5 GB | ~0.7 s | **Default.** Best punctuation and fidelity; question marks and commas consistently right. |
+| `llama3.2:3b` | 2.0 GB | ~0.5 s | Fastest; occasional comma/question-mark slips. |
 | `gemma3:4b` | 3.3 GB | ~2.5 s | Excellent fidelity, but noticeably slow, and outputs typographic (curly) quotes. |
 
 Avoid `phi4-mini` (paraphrases the speaker) and thinking-mode models like
