@@ -189,6 +189,11 @@ struct CleanupServiceTests {
         #expect(CleanupService.sanitize("Hi there!", raw: raw) == "Hi there!")
     }
 
+    @Test func sanitizeStripsEchoedWrapDelimiters() {
+        let output = "<<<\nHello world.\n>>>"
+        #expect(CleanupService.sanitize(output, raw: "hello world") == "Hello world.")
+    }
+
     @Test func sanitizeDropsPreambleLabelLine() {
         let output = "Here is the cleaned text:\nHello world."
         #expect(CleanupService.sanitize(output, raw: "hello world") == "Hello world.")
@@ -198,6 +203,49 @@ struct CleanupServiceTests {
         let output = "Here is the cleaned version:\nStep one."
         let raw = "here is the cleaned version colon step one"
         #expect(CleanupService.sanitize(output, raw: raw) == output)
+    }
+
+    // MARK: - conservation guardrail
+
+    @Test func sanitizeRejectsParaphraseThatDropsSpokenWords() {
+        // "Okay, let's see here" is the speaker's voice, not filler. An output
+        // that trims it is a paraphrase and must lose to the raw transcript.
+        let raw = "okay lets see here so what im thinking is we take the simple approach"
+        let paraphrased = "I'm thinking we take the simple approach."
+        #expect(CleanupService.sanitize(paraphrased, raw: raw) == nil)
+    }
+
+    @Test func sanitizeAcceptsFaithfulEditOfFreeformSpeech() {
+        let raw = "okay lets see here um so what im thinking is we take the simple approach"
+        let faithful = "Okay, let's see here. So what I'm thinking is we take the simple approach."
+        #expect(CleanupService.sanitize(faithful, raw: raw) == faithful)
+    }
+
+    @Test func sanitizeAcceptsSelfCorrectionRemovals() {
+        // Correction markers and revoked number words are ignorable, so a
+        // legitimate correction doesn't trip the conservation check.
+        let raw = "we need three no wait four copies by friday for the offsite"
+        #expect(CleanupService.sanitize("We need four copies by Friday for the offsite.", raw: raw)
+                == "We need four copies by Friday for the offsite.")
+    }
+
+    @Test func sanitizeAcceptsSpokenPunctuationAndNumberConversion() {
+        // "five thirty pm" → "5:30 PM" and "comma" → "," lose only ignorable words.
+        let raw = "the meeting moved to five thirty pm comma so update the invite"
+        let converted = "The meeting moved to 5:30 PM, so update the invite."
+        #expect(CleanupService.sanitize(converted, raw: raw) == converted)
+    }
+
+    @Test func retainedWordFractionIsFullForShortDictations() {
+        // Too few content words to judge — never reject on tiny inputs.
+        #expect(CleanupService.retainedWordFraction(raw: "hello world", cleaned: "Hi.") == 1.0)
+    }
+
+    @Test func retainedWordFractionIgnoresCaseAndPunctuation() {
+        let fraction = CleanupService.retainedWordFraction(
+            raw: "lets ship the zwhisper build on friday",
+            cleaned: "Let's ship the Zwhisper build on Friday!")
+        #expect(fraction == 1.0)
     }
 
     @Test func sanitizeUnwrapsQuotesTheModelAdded() {
