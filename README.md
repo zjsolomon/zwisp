@@ -6,9 +6,10 @@
 
 **Private, on-device dictation for macOS.** Hold your push-to-talk key
 (Right ⌘ by default), talk, release — your speech is transcribed locally and
-typed into whatever app is focused. Everything runs on your Mac; nothing is sent
-to a server, and no account is required. The only network access is a one-time
-download of the speech model.
+typed into whatever app is focused. An open-source, local-first alternative to
+hosted dictation tools like Wispr Flow: the same hold-a-key-anywhere workflow,
+but nothing leaves your Mac, and no account is required. The only network
+access is a one-time download of the speech model.
 
 [![CI](https://github.com/zjsolomon/Zwhisper/actions/workflows/ci.yml/badge.svg)](https://github.com/zjsolomon/Zwhisper/actions/workflows/ci.yml)
 ![Status](https://img.shields.io/badge/status-beta-yellow)
@@ -20,9 +21,16 @@ download of the speech model.
 > rough edges, and defaults or behaviour may still change between versions.
 > [Bug reports](https://github.com/zjsolomon/Zwhisper/issues) are very welcome.
 
-Zwhisper is an open-source, local-first alternative to hosted dictation tools
-such as Wispr Flow. It provides the same hold-a-key-anywhere workflow, but
-transcription runs on-device instead of in the cloud.
+## Quick start
+
+```bash
+git clone https://github.com/zjsolomon/Zwhisper.git
+cd Zwhisper && ./install.sh    # builds, installs to /Applications, launches
+```
+
+Needs an Apple Silicon Mac on macOS 14+ and a Swift toolchain
+(`xcode-select --install`). macOS will then ask for a few one-time
+permissions — see [First-run setup](#first-run-setup-one-time).
 
 ```
 key held  ──►  record mic (16 kHz)  ──►  release  ──►  WhisperKit (on-device)  ──►  types text
@@ -31,13 +39,10 @@ key held  ──►  record mic (16 kHz)  ──►  release  ──►  Whisper
 
 ## Features
 
-- **Fully on-device** — transcription runs locally via
-  [WhisperKit](https://github.com/argmaxinc/WhisperKit); your voice never
-  touches a server.
-- **Works everywhere** — types into any app that accepts keyboard input. It uses
+- **Works everywhere** — types into any app that accepts keyboard input, via
   synthetic key events, so it never touches or clobbers your clipboard.
-- **Push-to-talk** — hold your key, speak, release. No wake word, no window to
-  click. Right ⌘ by default, and you can set your own — even several at once.
+- **Your keys** — Right ⌘ by default; bind any modifier key you like, even
+  several at once.
 - **Optional AI cleanup** — pipe the raw transcript through a local LLM
   ([Ollama](https://ollama.com)) to remove filler words, apply self-corrections,
   and fix punctuation — still fully offline, with guardrails so a bad model
@@ -46,26 +51,16 @@ key held  ──►  record mic (16 kHz)  ──►  release  ──►  Whisper
 - **Small codebase** — a compact, dependency-light Swift project that is
   straightforward to read and audit.
 
-## Requirements
-
-- Apple Silicon Mac running macOS 14 (Sonoma) or later
-- A Swift toolchain to build from source — Xcode, or the Command Line Tools
-  (`xcode-select --install`)
-
-There's no notarized download yet, so you build it once from source (a single
-command). Everything below assumes you've cloned the repo:
-
-```bash
-git clone https://github.com/zjsolomon/Zwhisper.git
-cd Zwhisper
-```
-
 ## Installation
 
-```bash
-./install.sh          # builds the app, copies it to /Applications, and launches it
-```
+There's no notarized download yet, so you build it once from source — the two
+commands in [Quick start](#quick-start) are the whole install. You'll need:
 
+- an Apple Silicon Mac running macOS 14 (Sonoma) or later,
+- a Swift toolchain — Xcode, or the Command Line Tools
+  (`xcode-select --install`).
+
+`./install.sh` builds the app, copies it to `/Applications`, and launches it.
 The first launch walks you through a one-time permission setup (below). Once
 running, click the 🎙️ menu-bar icon → **Launch at Login** if you'd like it to
 start automatically on every boot — you can toggle that off there any time.
@@ -169,7 +164,11 @@ Avoid `phi4-mini` (paraphrases the speaker) and thinking-mode models like
 `deepseek-r1` (reasoning latency; Zwhisper suppresses thinking where the model
 allows it, but non-thinking instruct models are the right tool).
 
-Guardrails make the pass off-by-default-safe — dictation always works:
+Guardrails make cleanup fail-safe — dictation always works, and a bad model
+response never replaces your words.
+
+<details>
+<summary>How the guardrails work</summary>
 
 - If Ollama isn't running or errors, the raw transcript is used unchanged.
 - The model is asked not to reason out loud (`think: false`), and any
@@ -184,6 +183,8 @@ Guardrails make the pass off-by-default-safe — dictation always works:
   paraphrase and discarded — the raw transcript is typed instead.
 - Generation is capped relative to input length, and the model is kept warm
   between dictations so cleanup stays fast.
+
+</details>
 
 ## Configuration
 
