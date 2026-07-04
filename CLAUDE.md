@@ -53,12 +53,26 @@ covered by CI. The app layer should stay a thin glue layer.
   other apps). `AppDelegate` prompts for all three on launch.
 - **Only modifier keys** (⌘ ⌥ ⌃ ⇧ Fn) can be hotkeys — held while talking, don't auto-repeat.
   Left/right modifiers are distinct. Default is Right ⌘ (`HotkeyStore.defaultHotkeys`).
+- **Fn/Globe needs keycode filtering**: arrow, Home/End, and Page keys also set the Fn flag bit,
+  so `Hotkey.held`/`newlyPressed` only honour an Fn transition when the event's keycode is the Fn
+  key (`fnKeyCode = 63`). Without it, pressing an arrow starts/stops recording. Preserve the check.
 - `AudioRecorder.samples` is written on the realtime audio thread and read on main — guarded by
   an `NSLock`. Preserve that when touching it.
 - Text is injected via **synthetic Unicode key events** (`TextInjector.swift`), *not* the
   clipboard — never clobbers the user's pasteboard. Don't "simplify" it to a ⌘V paste.
-- Ollama cleanup is **off-by-default-safe**: if Ollama isn't running or errors, it falls back to
-  the raw transcript. Keep that fallback intact — dictation must always work.
+- Injection is **gated and queued, not immediate**: a finished dictation waits (via
+  `Configuration.InjectionGate` / `AppDelegate.waitUntilSafeToType`) until the keyboard has been
+  quiet *and* no modifier is held — the hotkey is itself a modifier, and typing with ⌘ down fires
+  the target app's shortcuts. A `maxInjectionWait` cap keeps a job from being starved. Jobs run
+  **strictly serial and in order** (chained through `pipelineTail`) and each remembers the
+  frontmost app's PID at record time — if focus moved, the result is dropped, not typed into the
+  wrong app. Don't make injection fire synchronously on release.
+- Ollama cleanup is **on by default but fail-safe**: enabled unless the user turns it off
+  (`CleanupService.enabled`, persisted), with *two* fallbacks to the raw transcript — Ollama
+  unreachable/errors, and output that fails the guardrails in `CleanupService.sanitize` (the
+  conservation rule: a cleanup that drops too many of the speaker's words is discarded). Keep both
+  fallbacks intact — dictation must always work. The cleanup model is user-selectable from the menu
+  (`availableModels()` lists what Ollama has); the pick is persisted and overrides the config default.
 - WhisperKit downloads the model from Hugging Face on first use (internet once), then runs
   offline. Transcription is **batch on release**, not live streaming.
 - Signing: `build-app.sh` prefers a stable self-signed identity (`setup-signing.sh`) so grants
