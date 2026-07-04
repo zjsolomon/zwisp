@@ -62,7 +62,10 @@ public struct Configuration {
             // Near-greedy: transcription editing has one right answer; sampling
             // freedom only invites paraphrase.
             temperature: Double = 0.1,
-            timeout: TimeInterval = 20,
+            // Warm models answer in well under a second; 8s covers a cold
+            // model load without leaving the user staring at "thinking" —
+            // beyond it, the raw transcript is typed instead.
+            timeout: TimeInterval = 8,
             systemPrompt: String = Cleanup.defaultSystemPrompt,
             keepAlive: String = "30m",
             minResponseTokens: Int = 100,
@@ -186,10 +189,47 @@ public struct Configuration {
         public var chunkSize: Int
         /// Small gap between chunks so fast apps don't drop events.
         public var interKeystrokeDelayMicroseconds: useconds_t
+        /// Injection waits for the user's hands to be still: no hardware key
+        /// event for this long, and no modifier held (typing while ⌘ is down
+        /// would trigger the target app's shortcuts instead of inserting text).
+        public var quietWindow: TimeInterval
+        /// …but never waits longer than this before typing anyway, so a queued
+        /// dictation can't be starved forever.
+        public var maxInjectionWait: TimeInterval
 
-        public init(chunkSize: Int = 16, interKeystrokeDelayMicroseconds: useconds_t = 2_000) {
+        public init(
+            chunkSize: Int = 16,
+            interKeystrokeDelayMicroseconds: useconds_t = 2_000,
+            quietWindow: TimeInterval = 0.4,
+            maxInjectionWait: TimeInterval = 10
+        ) {
             self.chunkSize = chunkSize
             self.interKeystrokeDelayMicroseconds = interKeystrokeDelayMicroseconds
+            self.quietWindow = quietWindow
+            self.maxInjectionWait = maxInjectionWait
+        }
+    }
+
+    /// Pure decision for "may we type the result right now?", polled by the app
+    /// while a finished dictation waits to be injected. Separated so the policy
+    /// is unit-testable without synthesising keyboard state.
+    ///
+    /// Recording or a held modifier *always* blocks (typing with ⌘ down fires
+    /// the target app's shortcuts — never acceptable). The wait cap only
+    /// overrides the quiet-keyboard criterion, so ten seconds of continuous
+    /// typing can't starve a dictation forever, but injection still waits for
+    /// modifiers to lift.
+    public enum InjectionGate {
+        public static func canInject(
+            isRecording: Bool,
+            secondsSinceKeyEvent: TimeInterval,
+            modifiersDown: Bool,
+            waited: TimeInterval,
+            config: Injection
+        ) -> Bool {
+            guard !isRecording, !modifiersDown else { return false }
+            return secondsSinceKeyEvent >= config.quietWindow
+                || waited >= config.maxInjectionWait
         }
     }
 
