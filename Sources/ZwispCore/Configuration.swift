@@ -8,19 +8,22 @@ public struct Configuration {
     public var cleanup: Cleanup
     public var injection: Injection
     public var streaming: Streaming
+    public var dictionary: PersonalDictionary
 
     public init(
         whisperModel: String,
         audio: Audio = Audio(),
         cleanup: Cleanup = Cleanup(),
         injection: Injection = Injection(),
-        streaming: Streaming = Streaming()
+        streaming: Streaming = Streaming(),
+        dictionary: PersonalDictionary = PersonalDictionary()
     ) {
         self.whisperModel = whisperModel
         self.audio = audio
         self.cleanup = cleanup
         self.injection = injection
         self.streaming = streaming
+        self.dictionary = dictionary
     }
 
     /// Microphone capture / WhisperKit input format.
@@ -200,6 +203,27 @@ public struct Configuration {
         Input: there are two steps here number one back up the data number two run the migration
         Output: There are two steps here: 1. Back up the data. 2. Run the migration.
         """
+
+        /// Renders the system prompt actually sent to Ollama: the base prompt,
+        /// plus the user's personal dictionary when it has entries. The
+        /// dictionary lives in the *system* prompt (not `wrapPrompt`) so
+        /// `CleanupService.warmUp` prefills it into the KV cache once — a
+        /// dictionary in the per-request prompt would be re-prefilled on every
+        /// dictation and eat into the timeout budget.
+        public static func systemPrompt(base: String, dictionary: [String]) -> String {
+            guard !dictionary.isEmpty else { return base }
+            return base + """
+
+
+            PERSONAL DICTIONARY — names and terms this speaker uses, with their \
+            exact spellings: \(dictionary.joined(separator: ", ")).
+            When a transcript word or short phrase is clearly a mishearing or \
+            misspelling of one of these, replace it with the exact spelling \
+            above (including its capitalization). Never insert a dictionary \
+            term the speaker didn't say, and never change words that are not \
+            mishearings of a dictionary term.
+            """
+        }
     }
 
     /// Eager transcription while the hotkey is held (`StreamingTranscript` +
@@ -233,6 +257,37 @@ public struct Configuration {
             self.confirmationMarginSeconds = confirmationMarginSeconds
             self.minNewAudioSeconds = minNewAudioSeconds
             self.pollInterval = pollInterval
+        }
+    }
+
+    /// The personal dictionary: user-added names/terms that steer transcription
+    /// (via the cleanup system prompt) and drive `TranscriptCorrector`'s
+    /// deterministic post-pass. Matching thresholds are deliberately
+    /// conservative — a wrong "correction" is worse than a missed one.
+    public struct PersonalDictionary {
+        /// Entries longer than this are rejected (a Services selection can be
+        /// an arbitrary run of text; the dictionary is for names and terms).
+        public var maxEntryLength: Int
+        /// Same guard, in words.
+        public var maxEntryWords: Int
+        /// Entries whose normalized form is shorter than this never fuzzy-match
+        /// (exact/casing/join matches only) — at 4 letters, edit distance 1
+        /// turns everyday words into names ("died" → "Zied").
+        public var fuzzyMinLength: Int
+        /// Normalized length from which 2 edits are tolerated; between
+        /// `fuzzyMinLength` and this, only 1 edit is.
+        public var fuzzyTwoEditMinLength: Int
+
+        public init(
+            maxEntryLength: Int = 64,
+            maxEntryWords: Int = 4,
+            fuzzyMinLength: Int = 5,
+            fuzzyTwoEditMinLength: Int = 8
+        ) {
+            self.maxEntryLength = maxEntryLength
+            self.maxEntryWords = maxEntryWords
+            self.fuzzyMinLength = fuzzyMinLength
+            self.fuzzyTwoEditMinLength = fuzzyTwoEditMinLength
         }
     }
 

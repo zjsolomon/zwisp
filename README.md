@@ -47,6 +47,10 @@ key held  ──►  record mic (16 kHz)  ──►  release  ──►  Whisper
   ([Ollama](https://ollama.com)) to remove filler words, apply self-corrections,
   and fix punctuation — still fully offline, with guardrails so a bad model
   response never replaces your words.
+- **Personal dictionary** — teach zwisp names and terms it keeps mishearing
+  ("Zied", "WhisperKit"): select the correct spelling in any app, right-click →
+  **Services** → **Add to zwisp Dictionary**. Future dictations use your exact
+  spelling.
 - **Lives in the menu bar** — no Dock icon and no windows. Can launch at login.
 - **Small codebase** — a compact, dependency-light Swift project that is
   straightforward to read and audit.
@@ -135,6 +139,25 @@ Click the menu-bar icon → **Hotkeys**:
 Only modifier keys (⌘ ⌥ ⌃ ⇧ and Fn 🌐) can be hotkeys — you hold one to talk, and
 modifiers don't type characters or auto-repeat while held. Left and right
 modifiers are distinct, so you can bind Right ⌘ without affecting Left ⌘.
+
+### Personal dictionary
+
+Whisper spells names it has never seen however it pleases. When a dictation
+comes out with "zeed" instead of "Zied":
+
+- **Add a word** — select the *correct* spelling anywhere (a document, a chat,
+  a browser), right-click it → **Services** → **Add to zwisp Dictionary**.
+  (macOS sometimes tucks the item inside the Services submenu; if it doesn't
+  appear at all right after installing, log out and back in — macOS caches the
+  Services registry.)
+- **Review / remove** — menu-bar icon → **Dictionary** lists your words; click
+  one to remove it.
+
+Dictionary words steer dictations two ways: the AI cleanup model is told your
+exact spellings, and a built-in corrector fixes close mishearings ("zeed" →
+"Zied", "whisper kit" → "WhisperKit") even when cleanup is off. Entries are
+short terms — a name or phrase of at most 4 words — and everything stays on
+your Mac, like the rest of zwisp.
 
 ## Optional: AI cleanup with Ollama
 

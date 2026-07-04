@@ -36,15 +36,18 @@ WhisperKit/CoreML. **Keep this split when adding code.**
   Put testable logic here. Files: `Configuration.swift` (all tunable settings in one place),
   `MenuBarState.swift`, `OnboardingState.swift` (permission checklist model + copy),
   `Hotkey.swift`, `HotkeyStore.swift`, `CleanupService.swift` (Ollama cleanup),
-  `StreamingTranscript.swift` (streaming confirmation state machine), `AudioPadding.swift`,
-  `TextInjector.swift`, `TranscriptFormatter.swift`, `Logger.swift`.
+  `DictionaryStore.swift` (personal dictionary persistence), `TranscriptCorrector.swift`
+  (deterministic dictionary post-pass), `StreamingTranscript.swift` (streaming confirmation
+  state machine), `AudioPadding.swift`, `TextInjector.swift`, `TranscriptFormatter.swift`,
+  `Logger.swift`.
 - **`Sources/zwisp/`** — the executable: system-framework + WhisperKit glue on top of the
   core. Not unit-tested. Files: `main.swift`, `AppDelegate.swift` (wires everything, owns the
   status item), `HotkeyMonitor.swift` (global `CGEventTap`), `HotkeyCapturePanel.swift`,
   `AudioRecorder.swift` (`AVAudioEngine` → 16 kHz mono Float32), `Transcriber.swift`
   (WhisperKit wrapper; an actor that serializes all WhisperKit calls), `StreamingWorker.swift`
   (eager transcription loop while the key is held), `PermissionProbe.swift` (live permission
-  status + Settings deep links), `OnboardingWindow.swift` (first-run permission checklist).
+  status + Settings deep links), `OnboardingWindow.swift` (first-run permission checklist),
+  `ServicesProvider.swift` ("Add to zwisp Dictionary" macOS Service handler).
 - **`Tests/ZwispCoreTests/`** — tests for the core library only.
 
 **Rule (from README/Contributing): new logic goes in `ZwispCore` with a test** so it stays
@@ -89,6 +92,17 @@ covered by CI. The app layer should stay a thin glue layer.
   `CleanupService.warmUp()` whenever status transitions to active. Per-stage timings go to
   `~/Library/Logs/zwisp.log` (transcribe/cleanup seconds, plus Ollama's load/prefill/generate
   breakdown) — check there first when dictation "feels slow".
+- **Personal dictionary lives in the cleanup *system* prompt** (rendered by
+  `Configuration.Cleanup.systemPrompt(base:dictionary:)`) so `warmUp()` prefills it once —
+  and any dictionary change invalidates that KV cache, so `AppDelegate` must re-fire
+  `cleanup.warmUp()` after every add/remove (`refreshCleanupStatus` won't: it only warms on a
+  status *transition*). The deterministic `TranscriptCorrector` pass is applied at exactly one
+  seam — after `cleanup.clean` in `AppDelegate.process` — which covers batch, streamed,
+  cleanup-off, and every fallback path; don't add a second application site. Its thresholds
+  are deliberately conservative (short entries never fuzzy-match) — a wrong "correction" is
+  worse than a missed one. Words are added via a macOS Service (`NSServices` in Info.plist +
+  `ServicesProvider`); macOS caches Service registrations, so after editing that plist block
+  run `/System/Library/CoreServices/pbs -flush` and relaunch.
 - WhisperKit downloads the model from Hugging Face on first use (internet once), then runs
   offline. Transcription is **streamed while the key is held**: `StreamingWorker` re-transcribes
   the growing buffer (~1 s cadence) with `clipTimestamps` skipping confirmed audio, and
