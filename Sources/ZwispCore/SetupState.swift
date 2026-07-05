@@ -40,6 +40,19 @@ public enum InstallPhase: Equatable {
             return "Failed: \(message)"
         }
     }
+
+    /// Status copy for a dependency that is a *service* rather than an
+    /// artifact — the Ollama server. Its truth is reachability, not presence
+    /// on disk (a Homebrew CLI install has no app bundle at all), so the
+    /// resting states read "Running"/"Not running" instead of the install
+    /// wording. Progress and failure states pass through unchanged.
+    public var serverStatusLine: String {
+        switch self {
+        case .missing: return "Not running"
+        case .installed: return "Running"
+        case .installing, .failed: return statusLine
+        }
+    }
 }
 
 /// The whole first-run picture: the three permissions plus the three
@@ -50,7 +63,8 @@ public enum InstallPhase: Equatable {
 public struct SetupState: Equatable {
     public var permissions: OnboardingState
     public var speechModel: InstallPhase
-    /// The Ollama app is present *and* its local server is reachable.
+    /// Ollama's local server is reachable — however it was installed (app
+    /// bundle, Homebrew CLI, …). A reachable server IS an installed Ollama.
     public var ollamaApp: InstallPhase
     /// The recommended cleanup model appears in Ollama's `/api/tags`.
     public var cleanupModel: InstallPhase
@@ -80,18 +94,20 @@ public struct SetupState: Equatable {
 
     /// Title for the single cleanup-section chain button, or `nil` when there's
     /// nothing to do (already ready) or work is already underway (a phase is
-    /// busy — the button would race the running chain). The chain runs only
-    /// what's missing, so the title names the shortest path from here:
-    /// - both missing            → install Ollama, then pull the model
-    /// - Ollama up, model missing → just pull the model
-    /// - model on disk, server down → just start the server
-    public func cleanupActionTitle(modelName: String) -> String? {
+    /// busy — the button would race the running chain). The title names the
+    /// shortest path from here:
+    /// - server up, model missing → just pull the model
+    /// - server down but Ollama is on disk (app bundle or CLI) → just start it
+    ///   (never offer to install alongside an existing copy; once it's up,
+    ///   detection reveals whether the model still needs pulling)
+    /// - nothing anywhere → install Ollama, then pull the model
+    public func cleanupActionTitle(modelName: String, ollamaOnDisk: Bool = false) -> String? {
         guard !cleanupReady else { return nil }
         guard !ollamaApp.isBusy, !cleanupModel.isBusy else { return nil }
         if ollamaApp.isInstalled {
             return "Download \(modelName) (~2.6 GB)…"
         }
-        if cleanupModel.isInstalled {
+        if ollamaOnDisk || cleanupModel.isInstalled {
             return "Start Ollama…"
         }
         return "Install Ollama & download \(modelName)…"

@@ -90,8 +90,12 @@ struct SetupView: View {
 
     private var cleanupSection: some View {
         Section("AI cleanup (optional)") {
+            // Ollama is a service, not an artifact: its row reads
+            // "Running"/"Not running" (a Homebrew CLI install has no app
+            // bundle, so install wording would call a working server missing).
             installRow(title: "Ollama",
                        phase: model.ollamaPhase,
+                       status: model.ollamaPhase.serverStatusLine,
                        onRetry: { model.retryCleanupSetup() })
             installRow(title: model.cleanupModelName,
                        phase: model.cleanupModelPhase,
@@ -125,17 +129,19 @@ struct SetupView: View {
 
     // MARK: - Shared install row
 
-    /// One dependency row: title + `statusLine` caption, with a trailing
-    /// determinate/indeterminate `ProgressView` while installing and a "Retry"
-    /// button when failed. Matches the old onboarding's row layout in SwiftUI.
+    /// One dependency row: title + status caption (defaults to the phase's
+    /// install wording; the Ollama row passes `serverStatusLine` instead), with
+    /// a trailing determinate/indeterminate `ProgressView` while installing and
+    /// a "Retry" button when failed. Matches the old onboarding's row layout.
     @ViewBuilder
     private func installRow(title: String,
                             phase: InstallPhase,
+                            status: String? = nil,
                             onRetry: @escaping () -> Void) -> some View {
         HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 1) {
                 Text(title)
-                Text(phase.statusLine)
+                Text(status ?? phase.statusLine)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

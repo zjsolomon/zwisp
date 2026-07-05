@@ -29,6 +29,9 @@ final class SetupModel {
     private(set) var cleanupModelPhase: InstallPhase
     private(set) var cleanupModelName: String
     private(set) var readyMessage: String
+    /// Ollama exists on disk in some form (app bundle or Homebrew CLI). Picks
+    /// the repair action when the server is down: start it vs install it.
+    private(set) var ollamaOnDisk: Bool
 
     /// Rising-edge tracker for `permissions.allGranted`. Seeded with the initial
     /// state so the very first refresh only fires `permissionsGranted` on a true
@@ -59,6 +62,7 @@ final class SetupModel {
         self.cleanupModelName = cleanup.model
         self.readyMessage = OnboardingState.readyMessage(
             hotkeyNames: hotkeyStore.hotkeys.map(\.name))
+        self.ollamaOnDisk = ollamaInstaller.serverToolOnDisk()
         self.wasAllGranted = initialPermissions.allGranted
     }
 
@@ -72,14 +76,15 @@ final class SetupModel {
                    speechModel: speechPhase,
                    ollamaApp: ollamaPhase,
                    cleanupModel: cleanupModelPhase)
-            .cleanupActionTitle(modelName: cleanupModelName)
+            .cleanupActionTitle(modelName: cleanupModelName, ollamaOnDisk: ollamaOnDisk)
     }
 
-    /// True when the chain button is the "Start Ollama…" variant — the model is
-    /// already pulled but the server is down, so the tap should only start the
-    /// server, not re-run the whole install chain.
+    /// True when the chain button is the "Start Ollama…" variant — Ollama is
+    /// already on disk (or its model already pulled) but the server is down, so
+    /// the tap should only start the server, not re-run the install chain.
+    /// Must mirror the "Start Ollama…" branch of `cleanupActionTitle`.
     var cleanupActionIsStartOnly: Bool {
-        cleanupModelPhase.isInstalled && !ollamaPhase.isInstalled
+        !ollamaPhase.isInstalled && (ollamaOnDisk || cleanupModelPhase.isInstalled)
     }
 
     // MARK: - Refresh
@@ -95,6 +100,7 @@ final class SetupModel {
         cleanupModelName = cleanup.model
         readyMessage = OnboardingState.readyMessage(
             hotkeyNames: hotkeyStore.hotkeys.map(\.name))
+        ollamaOnDisk = ollamaInstaller.serverToolOnDisk()
         detectRisingEdge()
     }
 

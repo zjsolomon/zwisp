@@ -42,7 +42,8 @@ WhisperKit/CoreML. **Keep this split when adding code.**
   (Ollama cleanup; also the `pullModel` streaming seam), `DictionaryStore.swift` (personal
   dictionary persistence), `TranscriptCorrector.swift` (deterministic dictionary post-pass),
   `StreamingTranscript.swift` (streaming confirmation state machine), `AudioPadding.swift`,
-  `TextInjector.swift`, `TranscriptFormatter.swift`, `Logger.swift`.
+  `TextInjector.swift`, `TranscriptFormatter.swift`, `WaveLevelMeter.swift` (deterministic
+  dictation-wave math), `OverlayStore.swift` (overlay on/off preference), `Logger.swift`.
 - **`Sources/zwisp/`** — the executable: system-framework + WhisperKit glue on top of the
   core. Not unit-tested. Files: `main.swift`, `AppDelegate.swift` (wires everything, owns the
   status item; `@MainActor`), `HotkeyMonitor.swift` (global `CGEventTap`),
@@ -53,7 +54,8 @@ WhisperKit/CoreML. **Keep this split when adding code.**
   status + Settings deep links), `SpeechModelInstaller.swift` (downloads the WhisperKit model
   with progress), `OllamaInstaller.swift` (installs Ollama + pulls the cleanup model),
   `SetupWindow.swift`/`SetupModel.swift`/`SetupView.swift` (the SwiftUI first-run setup trio,
-  replacing the old `OnboardingWindow`).
+  replacing the old `OnboardingWindow`), `DictationOverlay.swift` (the on-screen dictation
+  wave — click-through panel + 30 Hz redraw + SwiftUI view).
 - **`Tests/ZwispCoreTests/`** — tests for the core library only.
 
 **Rule (from README/Contributing): new logic goes in `ZwispCore` with a test** so it stays
@@ -73,7 +75,13 @@ covered by CI. The app layer should stay a thin glue layer.
   the official signed zip (`ditto -xk`, then `codesign --verify --deep --strict` + bundle-ID
   check *before* it's ever launched — never strip quarantine, never `spctl`), start its
   server, and pull the recommended cleanup model via `/api/pull` streaming
-  (`CleanupService.pullModel` + core `OllamaPull`). **Auto-show gate = hotkey permissions
+  (`CleanupService.pullModel` + core `OllamaPull`). **Ollama detection is
+  reachability-based**: a server answering `/api/tags` counts as installed even with no
+  `Ollama.app` anywhere (Homebrew CLI installs exist — `OllamaInstaller.refreshDetection`),
+  the setup row reads "Running"/"Not running" (`InstallPhase.serverStatusLine`), disk presence
+  (`serverToolOnDisk()`, app bundle OR CLI) only picks the server-down repair action
+  (start vs install), and the install chain never installs Ollama.app alongside a CLI copy.
+  **Auto-show gate = hotkey permissions
   missing OR the speech model isn't on disk** (`permissions.needsSetup ||
   speechInstaller.installedFolder() == nil`); Ollama/cleanup missing alone **never** auto-shows
   (it's optional — don't nag about a multi-GB download). Live status checks + deep links live
@@ -161,6 +169,21 @@ covered by CI. The app layer should stay a thin glue layer.
   1 s before the clip end). Recordings are padded with trailing silence to
   `Configuration.Audio.minimumTranscribableSamples` (1.4 s) in `Transcriber` — don't remove the
   padding, or quick dictations like "short one" vanish again.
+- **The dictation wave (`DictationOverlay.swift`) must NEVER steal focus.** It's a
+  click-through, non-activating `NSPanel` (`ClickThroughPanel` overrides `canBecomeKey`/
+  `canBecomeMain` to `false`, plus `.nonactivatingPanel` + `ignoresMouseEvents`) — the app
+  being dictated into keeps keyboard focus, which the injection gate's frontmost-PID check and
+  synthetic typing depend on. Don't let it activate zwisp or become key. Visually it's a
+  quantized 8-bit LED equalizer (columns of discrete lit cells, `litRows`), not smooth capsule
+  bars. Wave *math* is `WaveLevelMeter` in core (deterministic, unit-tested); this file only
+  drives it with a real clock. `AudioRecorder`'s `NSLock` now guards **`samples` AND `latestPower`** — the level is
+  computed (vDSP) and stored inside the realtime tap's existing critical section, read O(1) by
+  `currentLevel()`; preserve that discipline. Show/hide seams live in `AppDelegate`:
+  `startRecording()` (show, gated on `overlayStore.enabled`), `stopAndTranscribe()` (hide on
+  stray tap, `beginThinking()` after `jobsInFlight += 1`), and `finishJob()`'s defer — which
+  hides only when **`jobsInFlight == 0 && !isRecording`** (queued jobs keep it pulsing until the
+  last drains; `!isRecording` yields the panel to a re-pressed hotkey). User toggle is
+  `OverlayStore` ("overlayEnabled", absent → on), exposed in Settings' General tab.
 - Signing: `build-app.sh` prefers a stable self-signed identity (`setup-signing.sh`) so grants
   persist across rebuilds; falls back to ad-hoc, which may require re-granting Accessibility.
 

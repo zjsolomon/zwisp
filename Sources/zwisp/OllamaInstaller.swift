@@ -18,8 +18,11 @@ import ZwispCore
 /// we ever launch it. We never strip quarantine and never touch `spctl`.
 @MainActor
 final class OllamaInstaller {
-    /// The Ollama app is present on disk *and* its local server is reachable.
-    /// Anything less reads as `.missing` so the setup UI offers the right fix.
+    /// Ollama's local server is reachable. Reachability is the whole truth —
+    /// a Homebrew `ollama serve` has no app bundle anywhere, so requiring one
+    /// here would call a perfectly working install "missing". Disk presence
+    /// only matters when the server is DOWN, to pick the repair action
+    /// (start vs install) — see `serverToolOnDisk()`.
     private(set) var appPhase: InstallPhase = .missing
     /// The recommended cleanup model (`cleanup.model`) is in `/api/tags`.
     private(set) var modelPhase: InstallPhase = .missing
@@ -67,14 +70,21 @@ final class OllamaInstaller {
     /// only the pull chain triggers a re-warm.)
     func refreshDetection() async {
         guard !appPhase.isBusy, !modelPhase.isBusy else { return }
-        let appOnDisk = installedAppURL() != nil
         let models = await cleanup.availableModels()  // nil ⇒ server unreachable
 
-        // The app "phase" is installed only when the bundle is present AND its
-        // server is up — the cleanup chain needs both to run.
-        appPhase = (appOnDisk && models != nil) ? .installed : .missing
+        // A reachable server IS an installed Ollama, however it got here —
+        // app bundle, Homebrew CLI, hand-built. Never require a .app on disk.
+        appPhase = (models != nil) ? .installed : .missing
         modelPhase = (models?.contains(cleanup.model) == true) ? .installed : .missing
         onPhaseChange?()
+    }
+
+    /// Is Ollama present on disk in ANY form — app bundle or CLI binary?
+    /// Drives the repair action when the server is down: on-disk means "start
+    /// it", absent means "install it". (Reachability, not this, decides the
+    /// `appPhase` — see `refreshDetection`.)
+    func serverToolOnDisk() -> Bool {
+        installedAppURL() != nil || Self.cliURL() != nil
     }
 
     // MARK: - Setup chain
@@ -89,8 +99,10 @@ final class OllamaInstaller {
     }
 
     private func runChain() async {
-        // 1. Install the app bundle if it isn't on disk.
-        if installedAppURL() == nil {
+        // 1. Install the app bundle only when NO copy of Ollama exists on disk
+        //    — a Homebrew CLI install counts (launchServer knows how to start
+        //    it); installing Ollama.app alongside it would just duplicate.
+        if !serverToolOnDisk() {
             do {
                 try await installAppBundle()
             } catch let error as InstallError {
@@ -135,14 +147,13 @@ final class OllamaInstaller {
             Log.write("launched Ollama.app at \(appURL.path)")
             return
         }
-        if let cli = ["/opt/homebrew/bin/ollama", "/usr/local/bin/ollama"]
-            .first(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
+        if let cli = Self.cliURL() {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/bin/sh")
-            process.arguments = ["-c", "nohup \(cli) serve >/dev/null 2>&1 &"]
+            process.arguments = ["-c", "nohup \(cli.path) serve >/dev/null 2>&1 &"]
             do {
                 try process.run()
-                Log.write("started '\(cli) serve' (detached)")
+                Log.write("started '\(cli.path) serve' (detached)")
             } catch {
                 Log.write("failed to start ollama serve: \(error)")
             }
@@ -364,6 +375,13 @@ final class OllamaInstaller {
 
     private static func existingURL(_ path: String) -> URL? {
         FileManager.default.fileExists(atPath: path) ? URL(fileURLWithPath: path) : nil
+    }
+
+    /// The Homebrew/manual CLI install, if any (Apple Silicon and Intel paths).
+    private static func cliURL() -> URL? {
+        ["/opt/homebrew/bin/ollama", "/usr/local/bin/ollama"]
+            .first(where: { FileManager.default.isExecutableFile(atPath: $0) })
+            .map { URL(fileURLWithPath: $0) }
     }
 
     /// A short human message wrapping either an install-step failure.

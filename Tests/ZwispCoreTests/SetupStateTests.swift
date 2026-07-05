@@ -76,6 +76,16 @@ struct SetupStateTests {
         #expect(title == "Start Ollama…")
     }
 
+    @Test func cleanupActionTitleStartOnlyWhenOllamaOnDiskButServerDown() {
+        // Ollama exists on disk (app bundle or Homebrew CLI) with the server
+        // down: offer to start it — never to install alongside it. The model
+        // may still need pulling, but that's only knowable once the server is
+        // up, at which point the button becomes the pull variant.
+        let title = state(ollamaApp: .missing, cleanupModel: .missing)
+            .cleanupActionTitle(modelName: "qwen3:4b-instruct", ollamaOnDisk: true)
+        #expect(title == "Start Ollama…")
+    }
+
     @Test func cleanupActionTitleNilWhenReady() {
         #expect(state().cleanupActionTitle(modelName: "qwen3:4b-instruct") == nil)
     }
@@ -96,6 +106,16 @@ struct SetupStateTests {
         #expect(InstallPhase.missing.statusLine == "Not installed")
         #expect(InstallPhase.installed.statusLine == "Installed")
         #expect(InstallPhase.failed("disk full").statusLine == "Failed: disk full")
+    }
+
+    @Test func serverStatusLineUsesReachabilityWording() {
+        // The Ollama row: a service's truth is reachability, not disk presence.
+        #expect(InstallPhase.missing.serverStatusLine == "Not running")
+        #expect(InstallPhase.installed.serverStatusLine == "Running")
+        // Progress and failure states pass through the install wording.
+        #expect(InstallPhase.installing(stage: "Starting Ollama", fraction: nil)
+            .serverStatusLine == "Starting Ollama…")
+        #expect(InstallPhase.failed("timeout").serverStatusLine == "Failed: timeout")
     }
 
     @Test func statusLineRendersPercentWhenFractionKnown() {
