@@ -36,13 +36,15 @@ WhisperKit/CoreML. **Keep this split when adding code.**
   Put testable logic here. Files: `Configuration.swift` (all tunable settings in one place),
   `MenuBarState.swift`, `OnboardingState.swift` (permission checklist model + copy),
   `Hotkey.swift`, `HotkeyStore.swift`, `CleanupService.swift` (Ollama cleanup),
+  `StreamingTranscript.swift` (streaming confirmation state machine), `AudioPadding.swift`,
   `TextInjector.swift`, `TranscriptFormatter.swift`, `Logger.swift`.
 - **`Sources/zwisp/`** — the executable: system-framework + WhisperKit glue on top of the
   core. Not unit-tested. Files: `main.swift`, `AppDelegate.swift` (wires everything, owns the
   status item), `HotkeyMonitor.swift` (global `CGEventTap`), `HotkeyCapturePanel.swift`,
   `AudioRecorder.swift` (`AVAudioEngine` → 16 kHz mono Float32), `Transcriber.swift`
-  (WhisperKit wrapper), `PermissionProbe.swift` (live permission status + Settings deep
-  links), `OnboardingWindow.swift` (first-run permission checklist).
+  (WhisperKit wrapper; an actor that serializes all WhisperKit calls), `StreamingWorker.swift`
+  (eager transcription loop while the key is held), `PermissionProbe.swift` (live permission
+  status + Settings deep links), `OnboardingWindow.swift` (first-run permission checklist).
 - **`Tests/ZwispCoreTests/`** — tests for the core library only.
 
 **Rule (from README/Contributing): new logic goes in `ZwispCore` with a test** so it stays
@@ -88,7 +90,17 @@ covered by CI. The app layer should stay a thin glue layer.
   `~/Library/Logs/zwisp.log` (transcribe/cleanup seconds, plus Ollama's load/prefill/generate
   breakdown) — check there first when dictation "feels slow".
 - WhisperKit downloads the model from Hugging Face on first use (internet once), then runs
-  offline. Transcription is **batch on release**, not live streaming.
+  offline. Transcription is **streamed while the key is held**: `StreamingWorker` re-transcribes
+  the growing buffer (~1 s cadence) with `clipTimestamps` skipping confirmed audio, and
+  `StreamingTranscript` (core, tested) confirms segments that ended ≥ 2 s before the live edge —
+  segment *count* is no signal, continuous speech decodes as 1–2 segments. On release only the
+  unconfirmed tail is transcribed. The stream state is advisory: any error falls back to the
+  batch path, and `Configuration.Streaming.enabled` is the kill switch. All WhisperKit calls go
+  through the `Transcriber` actor's serial queue — never call WhisperKit concurrently.
+- **WhisperKit silently returns nothing for clips under ~1 s** (`windowClipTime` stops decoding
+  1 s before the clip end). Recordings are padded with trailing silence to
+  `Configuration.Audio.minimumTranscribableSamples` (1.4 s) in `Transcriber` — don't remove the
+  padding, or quick dictations like "short one" vanish again.
 - Signing: `build-app.sh` prefers a stable self-signed identity (`setup-signing.sh`) so grants
   persist across rebuilds; falls back to ad-hoc, which may require re-granting Accessibility.
 

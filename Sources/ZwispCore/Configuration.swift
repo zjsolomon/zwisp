@@ -7,17 +7,20 @@ public struct Configuration {
     public var audio: Audio
     public var cleanup: Cleanup
     public var injection: Injection
+    public var streaming: Streaming
 
     public init(
         whisperModel: String,
         audio: Audio = Audio(),
         cleanup: Cleanup = Cleanup(),
-        injection: Injection = Injection()
+        injection: Injection = Injection(),
+        streaming: Streaming = Streaming()
     ) {
         self.whisperModel = whisperModel
         self.audio = audio
         self.cleanup = cleanup
         self.injection = injection
+        self.streaming = streaming
     }
 
     /// Microphone capture / WhisperKit input format.
@@ -27,10 +30,18 @@ public struct Configuration {
         /// Recordings shorter than this are treated as a stray Fn tap and dropped.
         /// 1 600 samples ≈ 0.1 s at 16 kHz.
         public var minimumSampleCount: Int
+        /// Recordings are padded with trailing silence up to this length before
+        /// transcription. WhisperKit stops decoding `windowClipTime` (1 s) short
+        /// of the clip end to prevent hallucinations, so audio under ~1 s
+        /// silently produces zero segments — a quick "short one" would vanish.
+        /// 22 400 samples = 1.4 s: comfortably past the floor.
+        public var minimumTranscribableSamples: Int
 
-        public init(sampleRate: Double = 16_000, minimumSampleCount: Int = 1_600) {
+        public init(sampleRate: Double = 16_000, minimumSampleCount: Int = 1_600,
+                    minimumTranscribableSamples: Int = 22_400) {
             self.sampleRate = sampleRate
             self.minimumSampleCount = minimumSampleCount
+            self.minimumTranscribableSamples = minimumTranscribableSamples
         }
     }
 
@@ -189,6 +200,40 @@ public struct Configuration {
         Input: there are two steps here number one back up the data number two run the migration
         Output: There are two steps here: 1. Back up the data. 2. Run the migration.
         """
+    }
+
+    /// Eager transcription while the hotkey is held (`StreamingTranscript` +
+    /// the app's streaming worker), so releasing the key only pays for the
+    /// unconfirmed tail instead of the whole utterance.
+    public struct Streaming {
+        /// Kill switch: `false` restores pure batch-on-release behaviour.
+        public var enabled: Bool
+        /// A segment only confirms once it ended at least this many seconds
+        /// before the live edge of the buffer. Whisper's hypothesis is
+        /// unstable near the edge — confirming too early bakes in mid-word
+        /// artifacts. Raise this if streamed output ever differs from batch
+        /// output at seams. (Segment *count* is no signal: continuous speech
+        /// often decodes as a single long segment per pass.)
+        public var confirmationMarginSeconds: Double
+        /// Don't run an eager pass until at least this much new audio has
+        /// accumulated since the previous pass (mirrors WhisperKit's
+        /// AudioStreamTranscriber). Also means recordings shorter than this
+        /// never stream at all — they take the batch path unchanged.
+        public var minNewAudioSeconds: Double
+        /// How often the worker checks whether enough new audio arrived.
+        public var pollInterval: TimeInterval
+
+        public init(
+            enabled: Bool = true,
+            confirmationMarginSeconds: Double = 2.0,
+            minNewAudioSeconds: Double = 1.0,
+            pollInterval: TimeInterval = 0.1
+        ) {
+            self.enabled = enabled
+            self.confirmationMarginSeconds = confirmationMarginSeconds
+            self.minNewAudioSeconds = minNewAudioSeconds
+            self.pollInterval = pollInterval
+        }
     }
 
     /// Synthetic-keystroke text injection.
