@@ -81,7 +81,12 @@ covered by CI. The app layer should stay a thin glue layer.
   (`availableModels()` lists what Ollama has); the pick is persisted and overrides the config default.
   `CleanupService.status()` (off/unavailable/active) drives the menu-bar colour via `MenuBarState`
   (red = model loading, green = ready raw-only, blue = ready + cleanup); `AppDelegate` re-checks it
-  on toggle/model change, after each dictation, and on a 30 s poll.
+  on toggle/model change, after each dictation, and on a 30 s poll. **Cleanup is kept warm**: the
+  cold start (model load + prefill of the long system prompt) costs seconds and can blow the 8 s
+  timeout, so `keep_alive` is negative (never unload) and `AppDelegate` fires
+  `CleanupService.warmUp()` whenever status transitions to active. Per-stage timings go to
+  `~/Library/Logs/zwisp.log` (transcribe/cleanup seconds, plus Ollama's load/prefill/generate
+  breakdown) — check there first when dictation "feels slow".
 - WhisperKit downloads the model from Hugging Face on first use (internet once), then runs
   offline. Transcription is **batch on release**, not live streaming.
 - Signing: `build-app.sh` prefers a stable self-signed identity (`setup-signing.sh`) so grants

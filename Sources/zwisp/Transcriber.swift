@@ -8,7 +8,9 @@ final class Transcriber {
     private let whisperKit: WhisperKit
 
     init(model: String) async throws {
-        let config = WhisperKitConfig(model: model)
+        // prewarm: pay CoreML/ANE specialization at load time (menu bar already
+        // shows "loading") instead of on the first dictation.
+        let config = WhisperKitConfig(model: model, prewarm: true)
         whisperKit = try await WhisperKit(config)
     }
 
