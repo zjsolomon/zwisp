@@ -48,7 +48,7 @@ key held  ──►  record mic (16 kHz)  ──►  release  ──►  Whisper
   and fix punctuation — still fully offline, with guardrails so a bad model
   response never replaces your words.
 - **Personal dictionary** — teach zwisp names and terms it keeps mishearing
-  ("Zied", "WhisperKit") via the menu-bar **Dictionary** menu. Future
+  ("Ziedo", "zwisp", "Ollama") via the menu-bar **Dictionary** menu. Future
   dictations use your exact spelling.
 - **Lives in the menu bar** — no Dock icon and no windows. Can launch at login.
 - **Small codebase** — a compact, dependency-light Swift project that is
@@ -149,7 +149,7 @@ modifiers are distinct, so you can bind Right ⌘ without affecting Left ⌘.
 ### Personal dictionary
 
 Whisper spells names it has never seen however it pleases. When a dictation
-comes out with "zeed" instead of "Zied":
+comes out with "zeddo" instead of "Ziedo":
 
 - **Add a word** — menu-bar icon → **Dictionary** → **Add Word…**, and type
   the spelling you want (up to 4 words, e.g. a full name).
@@ -157,8 +157,8 @@ comes out with "zeed" instead of "Zied":
   one to remove it.
 
 Dictionary words steer dictations two ways: the AI cleanup model is told your
-exact spellings, and a built-in corrector fixes close mishearings ("zeed" →
-"Zied", "whisper kit" → "WhisperKit") even when cleanup is off. Entries are
+exact spellings, and a built-in corrector fixes close mishearings ("zeddo" →
+"Ziedo", "oh llama" → "Ollama") even when cleanup is off. Entries are
 short terms — a name or phrase of at most 4 words — and everything stays on
 your Mac, like the rest of zwisp.
 
