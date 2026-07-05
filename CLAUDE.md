@@ -46,8 +46,7 @@ WhisperKit/CoreML. **Keep this split when adding code.**
   `AudioRecorder.swift` (`AVAudioEngine` → 16 kHz mono Float32), `Transcriber.swift`
   (WhisperKit wrapper; an actor that serializes all WhisperKit calls), `StreamingWorker.swift`
   (eager transcription loop while the key is held), `PermissionProbe.swift` (live permission
-  status + Settings deep links), `OnboardingWindow.swift` (first-run permission checklist),
-  `ServicesProvider.swift` ("Add to zwisp Dictionary" macOS Service handler).
+  status + Settings deep links), `OnboardingWindow.swift` (first-run permission checklist).
 - **`Tests/ZwispCoreTests/`** — tests for the core library only.
 
 **Rule (from README/Contributing): new logic goes in `ZwispCore` with a test** so it stays
@@ -100,15 +99,13 @@ covered by CI. The app layer should stay a thin glue layer.
   seam — after `cleanup.clean` in `AppDelegate.process` — which covers batch, streamed,
   cleanup-off, and every fallback path; don't add a second application site. Its thresholds
   are deliberately conservative (short entries never fuzzy-match) — a wrong "correction" is
-  worse than a missed one. Words are added via a macOS Service (`NSServices` in Info.plist +
-  `ServicesProvider`); macOS caches Service registrations, so after editing that plist block
-  run `/System/Library/CoreServices/pbs -flush` and relaunch. `install.sh` enables the
-  Service and assigns its ⌃⌥⇧⌘Z shortcut by writing the `pbs NSServicesStatus` default
-  (skipped if an entry exists, so user customisations survive reinstalls) — keep the hint
-  copy in `rebuildDictionaryMenu`, README, and install.sh in sync if the shortcut changes.
-  All four modifiers on purpose: macOS Sequoia's window tiling claimed most ⌃⌥⌘ combos
-  (⌃⌥⌘Z zooms the window in e.g. Notes) and Services shortcuts can't tell left from right
-  modifiers, so the "hyper" chord is the only reliably unclaimed space.
+  worse than a missed one. Words are added/removed from the menu-bar Dictionary menu
+  (`rebuildDictionaryMenu` / `addDictionaryWordClicked` in `AppDelegate`). **A system-wide
+  right-click macOS Service was tried and abandoned** (2026-07): registration looked correct
+  in `pbs -dump_pboard`, but the item never surfaced in any app's Services menu even after
+  `pbs -flush`, enabling it in `pbs NSServicesStatus`, and assigning shortcuts — don't
+  re-attempt Services without new evidence (also beware: macOS Sequoia's window tiling
+  claimed most ⌃⌥⌘ shortcut combos, and Services can't tell left/right modifiers apart).
 - WhisperKit downloads the model from Hugging Face on first use (internet once), then runs
   offline. Transcription is **streamed while the key is held**: `StreamingWorker` re-transcribes
   the growing buffer (~1 s cadence) with `clipTimestamps` skipping confirmed audio, and
