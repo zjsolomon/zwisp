@@ -1,8 +1,6 @@
 <p align="center">
-  <img src="Assets/logo.png" alt="zwisp logo" width="160" height="160">
+  <img src="Assets/banner.png" alt="zwisp" width="620">
 </p>
-
-<h1 align="center">zwisp</h1>
 
 **Private, on-device dictation for macOS.** Hold your push-to-talk key
 (Right ⌘ by default), talk, release — your speech is transcribed locally and
