@@ -141,6 +141,45 @@ struct CleanupServiceTests {
         #expect(options["num_predict"] as? Int == 100)   // 11 chars × 2, floored at min
     }
 
+    // MARK: - Personal dictionary in the system prompt
+
+    @Test func buildRequestRendersDictionaryIntoSystemPrompt() throws {
+        let service = makeService(FakeClient(result: .failure(URLError(.badURL))))
+        service.dictionaryProvider = { ["Zied", "WhisperKit"] }
+
+        let body = try #require(service.buildRequest(for: "hello").httpBody)
+        let object = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        let system = try #require(object["system"] as? String)
+        #expect(system.contains("PERSONAL DICTIONARY"))
+        #expect(system.contains("Zied, WhisperKit"))
+        // The base instructions must survive untouched ahead of the dictionary.
+        #expect(system.hasPrefix(Configuration.Cleanup.defaultSystemPrompt))
+    }
+
+    @Test func buildRequestLeavesSystemPromptAloneWhenDictionaryIsEmpty() throws {
+        let service = makeService(FakeClient(result: .failure(URLError(.badURL))))
+
+        let body = try #require(service.buildRequest(for: "hello").httpBody)
+        let object = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        #expect(object["system"] as? String == Configuration.Cleanup.defaultSystemPrompt)
+    }
+
+    @Test func warmupRequestSharesDictionaryBearingSystemPrompt() throws {
+        // Warm-up exists to prefill the system prompt's KV cache; if it rendered
+        // a different system prompt than real requests, the prefill would be
+        // wasted and every dictation would pay it again.
+        let service = makeService(FakeClient(result: .failure(URLError(.badURL))))
+        service.dictionaryProvider = { ["Zied"] }
+
+        func system(of request: URLRequest) throws -> String {
+            let body = try #require(request.httpBody)
+            let object = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+            return try #require(object["system"] as? String)
+        }
+        #expect(try system(of: service.buildWarmupRequest())
+            == system(of: service.buildRequest(for: "hello")))
+    }
+
     // MARK: - warmUp()
 
     @Test func warmupRequestSharesPromptPrefixAndGeneratesOneToken() throws {

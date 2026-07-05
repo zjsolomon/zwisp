@@ -36,6 +36,14 @@ public final class CleanupService {
         didSet { defaults.set(model, forKey: Self.modelKey) }
     }
 
+    /// Supplies the personal dictionary rendered into the system prompt (see
+    /// `Configuration.Cleanup.systemPrompt(base:dictionary:)`). A closure, not
+    /// a snapshot, so every request sees the current words. NOTE: the app must
+    /// call `warmUp()` after the dictionary changes — a changed system prompt
+    /// invalidates the prefilled KV cache, and without a re-warm the next
+    /// dictation pays the prefill inside its timeout budget.
+    public var dictionaryProvider: () -> [String] = { [] }
+
     private let config: Configuration.Cleanup
     private let httpClient: HTTPClient
     private let defaults: UserDefaults
@@ -164,7 +172,8 @@ public final class CleanupService {
 
         let body: [String: Any] = [
             "model": model,
-            "system": config.systemPrompt,
+            "system": Configuration.Cleanup.systemPrompt(base: config.systemPrompt,
+                                                         dictionary: dictionaryProvider()),
             "prompt": prompt,
             "stream": false,
             // Reasoning models (qwen3, deepseek-r1, …) would otherwise think

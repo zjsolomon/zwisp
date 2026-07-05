@@ -32,5 +32,28 @@
         <key>NSAllowsLocalNetworking</key>
         <true/>
     </dict>
+    <!-- "Add to zwisp Dictionary" in every app's right-click Services menu:
+         select a name Whisper keeps mishearing and send its correct spelling
+         to the personal dictionary. Handled by ServicesProvider.addToDictionary.
+         macOS caches Service registrations; after changing this block, run
+         /System/Library/CoreServices/pbs -flush and relaunch the app. -->
+    <key>NSServices</key>
+    <array>
+        <dict>
+            <key>NSMenuItem</key>
+            <dict>
+                <key>default</key>
+                <string>Add to zwisp Dictionary</string>
+            </dict>
+            <key>NSMessage</key>
+            <string>addToDictionary</string>
+            <key>NSPortName</key>
+            <string>zwisp</string>
+            <key>NSSendTypes</key>
+            <array>
+                <string>NSStringPboardType</string>
+            </array>
+        </dict>
+    </array>
 </dict>
 </plist>

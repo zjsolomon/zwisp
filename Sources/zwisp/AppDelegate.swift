@@ -17,6 +17,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var streamingWorker: StreamingWorker?
 
     private let hotkeyStore = HotkeyStore()
+    private lazy var dictionaryStore = DictionaryStore(config: config.dictionary)
+    /// Receives "Add to zwisp Dictionary" Service invocations (selected text in
+    /// any app); registered as `NSApp.servicesProvider` at launch.
+    private lazy var servicesProvider = ServicesProvider(dictionary: dictionaryStore) {
+        [weak self] entry in
+        Log.write("dictionary: added '\(entry)' via Services")
+        self?.rewarmCleanupAfterDictionaryChange()
+    }
     private let probe = PermissionProbe()
     private lazy var onboarding = OnboardingWindow(
         probe: probe, hotkeyStore: hotkeyStore,
@@ -31,6 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let capturePanel = HotkeyCapturePanel()
     private let hotkeysMenu = NSMenu(title: "Hotkeys")
     private let cleanupMenu = NSMenu(title: "AI Cleanup")
+    private let dictionaryMenu = NSMenu(title: "Dictionary")
 
     // Independent readiness signals; the menu-bar state is derived from them.
     private var monitorActive = false
@@ -56,6 +65,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         Log.write("=== launched; modelName=\(config.whisperModel) ===")
         setupMenuBar()
+
+        // Personal dictionary: rendered into the cleanup system prompt (wired
+        // before the first status refresh below, so the initial warm-up
+        // prefills the dictionary-bearing prompt) and fed by the "Add to zwisp
+        // Dictionary" Service on selected text in any app.
+        cleanup.dictionaryProvider = { [weak self] in self?.dictionaryStore.entries ?? [] }
+        NSApp.servicesProvider = servicesProvider
+        NSUpdateDynamicServices()
+        Log.write("dictionary: \(dictionaryStore.entries.count) entries")
 
         // No permission prompts at launch — the onboarding window owns them,
         // one user-initiated prompt per row instead of a dialog pile-up.
@@ -217,7 +235,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let text = await cleanup.clean(raw)
         Log.write(String(format: "final text (%.2fs): '%@'",
                          Date().timeIntervalSince(cleanupStart), text))
-        await finishJob(injecting: text, targetPID: targetPID)
+        // Deterministic dictionary pass, applied last so it covers every path
+        // to the final text: batch, streamed, cleanup-off, and all the cleanup
+        // fallbacks. Also enforces exact casing the LLM may normalize away.
+        let corrected = TranscriptCorrector.correct(text, dictionary: dictionaryStore.entries,
+                                                    config: config.dictionary)
+        for correction in corrected.corrections {
+            Log.write("dictionary corrected '\(correction.original)' → '\(correction.replacement)'")
+        }
+        await finishJob(injecting: corrected.text, targetPID: targetPID)
     }
 
     /// Streamed transcription when the worker confirmed audio during the hold
@@ -362,6 +388,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         cleanupItem.submenu = cleanupMenu
         menu.addItem(cleanupItem)
 
+        // Dictionary submenu — rebuilt each time it opens (see menuNeedsUpdate).
+        dictionaryMenu.delegate = self
+        let dictionaryItem = NSMenuItem(title: "Dictionary", action: nil, keyEquivalent: "")
+        dictionaryItem.submenu = dictionaryMenu
+        menu.addItem(dictionaryItem)
+
         let loginItem = NSMenuItem(title: "Launch at Login",
                                    action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
         loginItem.state = (SMAppService.mainApp.status == .enabled) ? .on : .off
@@ -443,6 +475,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         cleanup.model = sender.title
         Log.write("cleanup model set to \(sender.title)")
         refreshCleanupStatus()
+    }
+
+    /// Populates the Dictionary submenu: the stored words (click to remove)
+    /// plus a hint about the Services-based add path.
+    private func rebuildDictionaryMenu() {
+        dictionaryMenu.removeAllItems()
+
+        if dictionaryStore.isEmpty {
+            let empty = NSMenuItem(title: "No words yet", action: nil, keyEquivalent: "")
+            empty.isEnabled = false
+            dictionaryMenu.addItem(empty)
+        } else {
+            let header = NSMenuItem(title: "Words zwisp spells your way (click to remove):",
+                                    action: nil, keyEquivalent: "")
+            header.isEnabled = false
+            dictionaryMenu.addItem(header)
+            for entry in dictionaryStore.sortedEntries {
+                let item = NSMenuItem(title: entry,
+                                      action: #selector(removeDictionaryEntry(_:)),
+                                      keyEquivalent: "")
+                item.target = self
+                item.state = .on
+                dictionaryMenu.addItem(item)
+            }
+        }
+
+        dictionaryMenu.addItem(.separator())
+        let hint = NSMenuItem(
+            title: "Add: select text in any app → right-click → Services → Add to zwisp Dictionary",
+            action: nil, keyEquivalent: "")
+        hint.isEnabled = false
+        dictionaryMenu.addItem(hint)
+    }
+
+    @objc private func removeDictionaryEntry(_ sender: NSMenuItem) {
+        dictionaryStore.remove(sender.title)
+        Log.write("dictionary: removed '\(sender.title)'")
+        rewarmCleanupAfterDictionaryChange()
+    }
+
+    /// The dictionary is part of the cleanup system prompt, so any change
+    /// invalidates the prefilled KV cache. Re-warm immediately — going through
+    /// `refreshCleanupStatus` wouldn't, since warm-up only fires there on a
+    /// status *transition* and the status hasn't changed.
+    private func rewarmCleanupAfterDictionaryChange() {
+        Task { await cleanup.warmUp() }
     }
 
     /// User clicked "Ollama isn't running — click to start". Try, in order:
@@ -597,11 +675,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 // MARK: - Hotkey management
 
 extension AppDelegate: NSMenuDelegate {
-    /// Rebuilds the Hotkeys / AI Cleanup submenus each time they open so they
-    /// reflect current state.
+    /// Rebuilds the Hotkeys / AI Cleanup / Dictionary submenus each time they
+    /// open so they reflect current state.
     func menuNeedsUpdate(_ menu: NSMenu) {
         if menu == cleanupMenu {
             rebuildCleanupMenu()
+            return
+        }
+        if menu == dictionaryMenu {
+            rebuildDictionaryMenu()
             return
         }
         guard menu == hotkeysMenu else { return }
