@@ -9,6 +9,7 @@ public struct Configuration {
     public var injection: Injection
     public var streaming: Streaming
     public var dictionary: PersonalDictionary
+    public var setup: Setup
 
     public init(
         whisperModel: String,
@@ -16,7 +17,8 @@ public struct Configuration {
         cleanup: Cleanup = Cleanup(),
         injection: Injection = Injection(),
         streaming: Streaming = Streaming(),
-        dictionary: PersonalDictionary = PersonalDictionary()
+        dictionary: PersonalDictionary = PersonalDictionary(),
+        setup: Setup = Setup()
     ) {
         self.whisperModel = whisperModel
         self.audio = audio
@@ -24,6 +26,7 @@ public struct Configuration {
         self.injection = injection
         self.streaming = streaming
         self.dictionary = dictionary
+        self.setup = setup
     }
 
     /// Microphone capture / WhisperKit input format.
@@ -110,6 +113,15 @@ public struct Configuration {
         public var tagsEndpoint: URL {
             var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)!
             components.path = "/api/tags"
+            return components.url!
+        }
+
+        /// Ollama's model-pull endpoint (`/api/pull`), derived from `endpoint`
+        /// the same way as `tagsEndpoint` so a custom host/port applies to all
+        /// three calls (generate, tags, pull).
+        public var pullEndpoint: URL {
+            var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)!
+            components.path = "/api/pull"
             return components.url!
         }
 
@@ -205,24 +217,37 @@ public struct Configuration {
         """
 
         /// Renders the system prompt actually sent to Ollama: the base prompt,
-        /// plus the user's personal dictionary when it has entries. The
-        /// dictionary lives in the *system* prompt (not `wrapPrompt`) so
-        /// `CleanupService.warmUp` prefills it into the KV cache once — a
-        /// dictionary in the per-request prompt would be re-prefilled on every
-        /// dictation and eat into the timeout budget.
-        public static func systemPrompt(base: String, dictionary: [String]) -> String {
-            guard !dictionary.isEmpty else { return base }
-            return base + """
+        /// plus the user's personal dictionary when it has entries, plus the
+        /// writing-style block last. The dictionary lives in the *system* prompt
+        /// (not `wrapPrompt`) so `CleanupService.warmUp` prefills it into the KV
+        /// cache once — a dictionary in the per-request prompt would be
+        /// re-prefilled on every dictation and eat into the timeout budget.
+        ///
+        /// Block order is fixed as base → dictionary → style, and the style
+        /// block is appended *last* on purpose: Ollama reuses the longest common
+        /// prefix of the KV cache, so switching style re-prefills only the short
+        /// style suffix rather than the whole prompt. With `.standard` style and
+        /// an empty dictionary the result is byte-identical to `base`.
+        public static func systemPrompt(base: String, dictionary: [String],
+                                        style: WritingStyle = .standard) -> String {
+            var result = base
+            if !dictionary.isEmpty {
+                result += """
 
 
-            PERSONAL DICTIONARY — names and terms this speaker uses, with their \
-            exact spellings: \(dictionary.joined(separator: ", ")).
-            When a transcript word or short phrase is clearly a mishearing or \
-            misspelling of one of these, replace it with the exact spelling \
-            above (including its capitalization). Never insert a dictionary \
-            term the speaker didn't say, and never change words that are not \
-            mishearings of a dictionary term.
-            """
+                PERSONAL DICTIONARY — names and terms this speaker uses, with their \
+                exact spellings: \(dictionary.joined(separator: ", ")).
+                When a transcript word or short phrase is clearly a mishearing or \
+                misspelling of one of these, replace it with the exact spelling \
+                above (including its capitalization). Never insert a dictionary \
+                term the speaker didn't say, and never change words that are not \
+                mishearings of a dictionary term.
+                """
+            }
+            if let styleBlock = style.promptBlock {
+                result += "\n\n" + styleBlock
+            }
+            return result
         }
     }
 
@@ -338,6 +363,43 @@ public struct Configuration {
             guard !isRecording, !modifiersDown else { return false }
             return secondsSinceKeyEvent >= config.quietWindow
                 || waited >= config.maxInjectionWait
+        }
+    }
+
+    /// First-run installer knobs: where to fetch Ollama, how to recognise a
+    /// valid install, and the disk-space floors that gate a download before it
+    /// starts (better to refuse than to half-download and fail). Kept here so
+    /// the distribution URL and thresholds are one edit away when Ollama's
+    /// packaging drifts.
+    public struct Setup {
+        /// Official signed Ollama macOS zip.
+        public var ollamaDownloadURL: URL
+        /// Bundle IDs a downloaded Ollama.app must have to be trusted — a
+        /// verification gate so we never launch an app we didn't expect.
+        public var ollamaBundleIDs: [String]
+        /// How long to wait for Ollama's local server to come up after launch.
+        public var ollamaServerStartTimeout: TimeInterval
+        /// How often to poll for the server while waiting.
+        public var ollamaServerPollInterval: TimeInterval
+        /// Refuse the speech-model download below this much free disk.
+        public var minFreeBytesForSpeechModel: Int64
+        /// Refuse the cleanup chain (zip + app + model + headroom) below this.
+        public var minFreeBytesForCleanupSetup: Int64
+
+        public init(
+            ollamaDownloadURL: URL = URL(string: "https://ollama.com/download/Ollama-darwin.zip")!,
+            ollamaBundleIDs: [String] = ["com.ollama.ollama", "com.electron.ollama"],
+            ollamaServerStartTimeout: TimeInterval = 60,
+            ollamaServerPollInterval: TimeInterval = 2,
+            minFreeBytesForSpeechModel: Int64 = 2 * 1_024 * 1_024 * 1_024,
+            minFreeBytesForCleanupSetup: Int64 = 6 * 1_024 * 1_024 * 1_024
+        ) {
+            self.ollamaDownloadURL = ollamaDownloadURL
+            self.ollamaBundleIDs = ollamaBundleIDs
+            self.ollamaServerStartTimeout = ollamaServerStartTimeout
+            self.ollamaServerPollInterval = ollamaServerPollInterval
+            self.minFreeBytesForSpeechModel = minFreeBytesForSpeechModel
+            self.minFreeBytesForCleanupSetup = minFreeBytesForCleanupSetup
         }
     }
 

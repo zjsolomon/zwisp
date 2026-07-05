@@ -74,10 +74,13 @@ start automatically on every boot — you can toggle that off there any time.
 ## First-run setup (one time)
 
 macOS gates microphone access, global hotkeys, and synthetic typing behind
-separate privacy permissions. **zwisp opens a setup guide on first launch** — a
-checklist with one button per permission. Follow the three rows; each flips to ✓
-as you grant it, and the guide tells you when you're ready to dictate. Closed it
-early? Reopen it any time via the menu-bar icon → **Setup Guide…**.
+separate privacy permissions, and zwisp also needs to fetch its speech model.
+**zwisp opens a guided setup on first launch** that walks through all of it: one
+button per permission (each row flips to ✓ as you grant it), a live-progress
+download of the speech model, and — optionally — a one-click install of Ollama
+plus the recommended cleanup model. The guide tells you when you're ready to
+dictate. Closed it early? Reopen it any time via the menu-bar icon → **Setup
+Guide…**.
 
 For reference, the three permissions it walks you through:
 
@@ -94,10 +97,14 @@ it to see which one is still missing. zwisp watches for the grant and starts
 working within a couple of seconds — no relaunch needed. The shortcuts in the
 menu jump you straight to each Settings pane.
 
-On first use, zwisp downloads the speech model from Hugging Face (the default
-`large-v3-turbo` is ~1.5 GB; lighter models are much smaller — see
-[Configuration](#configuration)). That's the only time it needs the internet;
-afterwards it runs fully offline.
+The setup window downloads the speech model from Hugging Face for you (the
+default `large-v3-turbo` is ~1.5 GB; lighter models are much smaller — see
+[Configuration](#configuration)), showing progress as it goes. That's the only
+download dictation needs; afterwards it runs fully offline. Want AI cleanup too?
+The setup window's optional **AI cleanup** section installs Ollama (from the
+official signed build, signature-verified before it's trusted) and pulls the
+recommended model — or you can bring your own Ollama and pick a different model
+later from Settings → Cleanup.
 
 ## Usage
 

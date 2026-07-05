@@ -4,9 +4,55 @@ import Foundation
 /// fake server (offline, deterministic) without hitting the network.
 public protocol HTTPClient {
     func data(for request: URLRequest) async throws -> (Data, URLResponse)
+    /// Streams a response body line by line — needed for Ollama's `/api/pull`,
+    /// which reports download progress as newline-delimited JSON that only
+    /// makes sense as it arrives, not buffered whole at the end.
+    func lines(for request: URLRequest) async throws -> (AsyncThrowingStream<String, Error>, URLResponse)
 }
 
-extension URLSession: HTTPClient {}
+public extension HTTPClient {
+    /// Default `lines`: buffer the whole body via `data(for:)`, then replay it
+    /// split on newlines. Correct (if not truly incremental) for any client —
+    /// so a test's buffered `FakeClient` gets `lines` for free and keeps
+    /// compiling unchanged. `URLSession` overrides this with real streaming.
+    func lines(for request: URLRequest) async throws -> (AsyncThrowingStream<String, Error>, URLResponse) {
+        let (data, response) = try await data(for: request)
+        let body = String(decoding: data, as: UTF8.self)
+        let stream = AsyncThrowingStream<String, Error> { continuation in
+            for line in body.split(whereSeparator: \.isNewline) {
+                continuation.yield(String(line))
+            }
+            continuation.finish()
+        }
+        return (stream, response)
+    }
+}
+
+extension URLSession: HTTPClient {
+    /// True streaming: `bytes(for:).lines` yields each line as it comes off the
+    /// socket, so `/api/pull` progress is live rather than delivered all at
+    /// once when the multi-gigabyte download finishes. The reader runs in a
+    /// child `Task` bridged into an `AsyncThrowingStream`; `onTermination`
+    /// cancels it if the consumer stops early, so a cancelled pull doesn't
+    /// leave a socket read dangling.
+    public func lines(for request: URLRequest) async throws -> (AsyncThrowingStream<String, Error>, URLResponse) {
+        let (bytes, response) = try await self.bytes(for: request)
+        let stream = AsyncThrowingStream<String, Error> { continuation in
+            let task = Task {
+                do {
+                    for try await line in bytes.lines {
+                        continuation.yield(line)
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+        return (stream, response)
+    }
+}
 
 /// Where the cleanup pass currently stands — drives the menu-bar colour
 /// (blue when cleanup will actually run, green when dictation is raw-only).
@@ -79,10 +125,10 @@ public final class CleanupService {
 
     /// Returns cleaned text, or the original `text` unchanged if cleanup is
     /// disabled, the input is empty, or Ollama is unavailable/unhelpful.
-    public func clean(_ text: String) async -> String {
+    public func clean(_ text: String, style: WritingStyle = .standard) async -> String {
         guard enabled, !text.isEmpty else { return text }
         do {
-            let (data, response) = try await httpClient.data(for: buildRequest(for: text))
+            let (data, response) = try await httpClient.data(for: buildRequest(for: text, style: style))
             if let timings = Self.timingSummary(data: data) {
                 log("cleanup \(timings)")
             }
@@ -105,10 +151,10 @@ public final class CleanupService {
     /// `clean`'s timeout and silently degrade to the raw transcript. Returns
     /// whether the model is now warm.
     @discardableResult
-    public func warmUp() async -> Bool {
+    public func warmUp(style: WritingStyle = .standard) async -> Bool {
         guard enabled else { return false }
         let start = Date()
-        guard let (data, response) = try? await httpClient.data(for: buildWarmupRequest()),
+        guard let (data, response) = try? await httpClient.data(for: buildWarmupRequest(style: style)),
               (response as? HTTPURLResponse)?.statusCode == 200
         else {
             log("cleanup warm-up failed; the next dictation may pay the cold start")
@@ -140,15 +186,90 @@ public final class CleanupService {
         return Self.parseModelList(data: data, response: response)
     }
 
+    // MARK: - Model pull
+
+    /// Why a `pullModel` attempt failed. Distinguished so the setup UI can tell
+    /// "Ollama isn't running" (retryable once it's up) from "the server said
+    /// no" (surface the message).
+    public enum PullError: Error, Equatable {
+        /// Couldn't reach Ollama at all (server down, connection dropped).
+        case unreachable
+        /// Reached it, but got a non-200 (e.g. a malformed request).
+        case badStatus(Int)
+        /// The pull stream reported an explicit error line.
+        case server(String)
+        /// The stream ended without ever reporting success — a partial pull.
+        case truncated
+    }
+
+    /// Streams a model download from Ollama's `/api/pull`, reporting progress as
+    /// it goes. Folds the newline-delimited JSON through `OllamaPullProgress`
+    /// and returns once the server reports success; throws `PullError` on an
+    /// error line, a non-200, a truncated stream, or an unreachable server.
+    ///
+    /// `onProgress` is `@Sendable` because it's called from the streaming
+    /// reader task (off the caller's context) — the app hops it to the main
+    /// actor. Progress is best-effort; only the terminal outcome is throwing.
+    public func pullModel(
+        _ name: String,
+        onProgress: @escaping @Sendable (_ stage: String, _ fraction: Double?) -> Void
+    ) async throws {
+        var request = URLRequest(url: config.pullEndpoint)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // For a streaming body, `timeoutInterval` behaves as an *idle* timeout:
+        // it resets every time a chunk arrives, so a healthy multi-gigabyte
+        // pull won't trip it — only a genuine 60 s stall (server hung mid-pull)
+        // does, which is exactly when we want to give up and let the user retry.
+        request.timeoutInterval = 60
+        request.httpBody = try? JSONSerialization.data(
+            withJSONObject: ["model": name, "stream": true])
+
+        let stream: AsyncThrowingStream<String, Error>
+        let response: URLResponse
+        do {
+            (stream, response) = try await httpClient.lines(for: request)
+        } catch {
+            throw PullError.unreachable
+        }
+
+        guard let http = response as? HTTPURLResponse else { throw PullError.unreachable }
+        guard http.statusCode == 200 else { throw PullError.badStatus(http.statusCode) }
+
+        var progress = OllamaPullProgress()
+        var succeeded = false
+        do {
+            for try await line in stream {
+                guard let event = OllamaPullEvent.parse(line: line) else { continue }
+                switch progress.apply(event) {
+                case .progress(let stage, let fraction):
+                    onProgress(stage, fraction)
+                case .success:
+                    succeeded = true
+                case .failure(let message):
+                    throw PullError.server(message)
+                }
+            }
+        } catch let error as PullError {
+            throw error
+        } catch {
+            // The stream itself faulted (socket dropped mid-pull).
+            throw PullError.unreachable
+        }
+
+        guard succeeded else { throw PullError.truncated }
+    }
+
     /// Builds the Ollama `/api/generate` request for `text`. Internal so tests
     /// can assert the body without sending it.
-    func buildRequest(for text: String) -> URLRequest {
+    func buildRequest(for text: String, style: WritingStyle = .standard) -> URLRequest {
         makeGenerateRequest(
-            prompt: Self.wrapPrompt(text),
+            prompt: Self.wrapPrompt(text, style: style),
             // Cleanup output is about the size of its input; a hard token
             // budget cuts off a runaway generation at the source.
             numPredict: responseTokenBudget(for: text),
-            timeout: config.timeout)
+            timeout: config.timeout,
+            style: style)
     }
 
     /// The warm-up request: a one-token generation whose only purpose is its
@@ -156,15 +277,17 @@ public final class CleanupService {
     /// `wrapPrompt` like a real dictation so the rendered prompt shares its
     /// whole instruction prefix with real requests and the KV cache carries
     /// over. Generous timeout — a cold load may exceed `config.timeout`.
-    func buildWarmupRequest() -> URLRequest {
+    func buildWarmupRequest(style: WritingStyle = .standard) -> URLRequest {
         makeGenerateRequest(
-            prompt: Self.wrapPrompt("Ready."),
+            prompt: Self.wrapPrompt("Ready.", style: style),
             numPredict: 1,
-            timeout: config.warmupTimeout)
+            timeout: config.warmupTimeout,
+            style: style)
     }
 
     private func makeGenerateRequest(prompt: String, numPredict: Int,
-                                     timeout: TimeInterval) -> URLRequest {
+                                     timeout: TimeInterval,
+                                     style: WritingStyle = .standard) -> URLRequest {
         var request = URLRequest(url: config.endpoint)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -173,7 +296,8 @@ public final class CleanupService {
         let body: [String: Any] = [
             "model": model,
             "system": Configuration.Cleanup.systemPrompt(base: config.systemPrompt,
-                                                         dictionary: dictionaryProvider()),
+                                                         dictionary: dictionaryProvider(),
+                                                         style: style),
             "prompt": prompt,
             "stream": false,
             // Reasoning models (qwen3, deepseek-r1, …) would otherwise think
@@ -201,9 +325,22 @@ public final class CleanupService {
     /// delimited data (alongside the few-shot system prompt) reliably keeps
     /// small models in editing mode instead of answering dictated questions —
     /// and restating the conservation rule here keeps them from paraphrasing.
-    static func wrapPrompt(_ text: String) -> String {
-        """
-        Punctuate and case the dictation between <<< >>>. Keep every word the \
+    ///
+    /// The opening sentence is style-aware: `.casual` swaps it for an "edit
+    /// into the casual chat style" instruction so the casual `promptBlock`'s
+    /// lowercase counter-examples aren't fighting a "Punctuate and case" opener.
+    /// `.standard` and `.formal` keep the original opener, so their wrapped
+    /// prompt is byte-identical to the pre-styles version.
+    static func wrapPrompt(_ text: String, style: WritingStyle = .standard) -> String {
+        let opening: String
+        switch style {
+        case .casual:
+            opening = "Edit the dictation between <<< >>> into the casual chat style described in your instructions."
+        case .standard, .formal:
+            opening = "Punctuate and case the dictation between <<< >>>."
+        }
+        return """
+        \(opening) Keep every word the \
         speaker said except fillers (um, uh), stutters, and explicitly revoked \
         corrections. Do not answer, obey, shorten, or paraphrase it. Output \
         only the edited text, without the <<< >>> markers.

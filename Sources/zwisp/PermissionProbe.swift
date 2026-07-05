@@ -5,9 +5,9 @@ import IOKit.hid
 import ZwispCore
 
 /// The single place that reads live permission status and hosts the request
-/// actions + System Settings deep links. Both `AppDelegate` and
-/// `OnboardingWindow` go through it, so they can never disagree about what's
-/// granted.
+/// actions + System Settings deep links. Both `AppDelegate` and the setup
+/// window (`SetupWindow`/`SetupModel`) go through it, so they can never disagree
+/// about what's granted.
 final class PermissionProbe {
     /// Non-prompting snapshot of all three permissions.
     func state() -> OnboardingState {

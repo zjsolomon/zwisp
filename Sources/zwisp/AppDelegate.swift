@@ -4,6 +4,13 @@ import ServiceManagement
 import ZwispCore
 
 /// Orchestrates the whole flow and owns the menu-bar item.
+///
+/// `@MainActor`: everything here runs on the main thread (the status item, the
+/// event-tap callbacks that hop to `DispatchQueue.main`, the SwiftUI windows,
+/// the `@MainActor` installers). Isolating the whole class lets it call the
+/// main-actor installers/setup window directly instead of sprinkling per-method
+/// annotations, and matches how `NSApplicationDelegate` is already isolated.
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let config = Configuration.default
     private var statusItem: NSStatusItem!
@@ -18,21 +25,94 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let hotkeyStore = HotkeyStore()
     private lazy var dictionaryStore = DictionaryStore(config: config.dictionary)
+    private let styleRuleStore = StyleRuleStore()
+    /// The writing style whose system prompt is currently prefilled in Ollama's
+    /// KV cache. Warm-ups only fire when the resolved style differs from this.
+    private var lastWarmedStyle: WritingStyle = .standard
+    /// Debounces app-switch/style-change re-warms so a flurry of activations
+    /// prefills once, not per event.
+    private var styleRewarmWork: DispatchWorkItem?
     private let probe = PermissionProbe()
-    private lazy var onboarding = OnboardingWindow(
-        probe: probe, hotkeyStore: hotkeyStore,
-        isModelReady: { [weak self] in self?.modelReady ?? false },
-        onPermissionsGranted: { [weak self] in
-            // Re-arm the tap the moment the last grant lands, instead of
-            // waiting out the 2 s retry poll — so the window's "You're
-            // ready" is true by the time the user reads it.
-            self?.startHotkeyMonitor()
+
+    /// Owns the WhisperKit model download (visible progress) + hands
+    /// `Transcriber` a ready folder. `onPhaseChange` repaints the setup window
+    /// and re-derives the menu-bar icon (`.loading` while the model isn't ready).
+    @MainActor
+    private lazy var speechInstaller: SpeechModelInstaller = {
+        let installer = SpeechModelInstaller(variant: config.whisperModel, setup: config.setup)
+        installer.onPhaseChange = { [weak self] in
+            self?.setup.refresh()
             self?.refreshState()
-        })
+        }
+        return installer
+    }()
+
+    /// Owns the optional AI-cleanup dependency chain (install Ollama, start the
+    /// server, pull the recommended model). `onCleanupModelReady` re-checks the
+    /// cleanup status so the freshly available model gets its KV cache warmed.
+    @MainActor
+    private lazy var ollamaInstaller: OllamaInstaller = {
+        let installer = OllamaInstaller(cleanup: cleanup, setup: config.setup)
+        installer.onPhaseChange = { [weak self] in
+            self?.setup.refresh()
+            self?.refreshState()
+        }
+        installer.onCleanupModelReady = { [weak self] in
+            self?.refreshCleanupStatus()
+        }
+        return installer
+    }()
+
+    /// The guided first-run setup window (SwiftUI in an `NSHostingController`):
+    /// the three permissions plus the speech-model download and the optional
+    /// Ollama-cleanup chain. Replaces the old `OnboardingWindow`; wired to the
+    /// same probe/stores/installers via the frozen `Actions` API.
+    @MainActor
+    private lazy var setup = SetupWindow(
+        probe: probe, hotkeyStore: hotkeyStore,
+        speechInstaller: speechInstaller, ollamaInstaller: ollamaInstaller,
+        cleanup: cleanup, config: config,
+        actions: SetupWindow.Actions(
+            permissionTapped: { [weak self] permission in
+                self?.handlePermissionTapped(permission)
+            },
+            permissionsGranted: { [weak self] in
+                // Re-arm the tap the moment the last grant lands, instead of
+                // waiting out the 2 s retry poll — so the window's "You're
+                // ready" is true by the time the user reads it.
+                self?.startHotkeyMonitor()
+                self?.refreshState()
+            },
+            retrySpeechDownload: { [weak self] in self?.startSpeechModelSetup() },
+            runCleanupSetup: { [weak self] in self?.ollamaInstaller.runSetupChain() },
+            startOllamaOnly: { [weak self] in self?.startOllama() }
+        ))
     private let capturePanel = HotkeyCapturePanel()
     private let hotkeysMenu = NSMenu(title: "Hotkeys")
     private let cleanupMenu = NSMenu(title: "AI Cleanup")
     private let dictionaryMenu = NSMenu(title: "Dictionary")
+
+    /// The unified Settings window (SwiftUI in an `NSHostingController`). Built
+    /// lazily on first use and wired to the same store/cleanup instances the
+    /// menu uses, via the frozen `Actions` API, so both surfaces stay in sync.
+    /// `@MainActor` because `SettingsWindow` is main-actor-isolated (as all its
+    /// AppKit/SwiftUI internals must be).
+    @MainActor
+    private lazy var settings = SettingsWindow(
+        hotkeyStore: hotkeyStore,
+        dictionaryStore: dictionaryStore,
+        styleRuleStore: styleRuleStore,
+        cleanup: cleanup,
+        config: config,
+        actions: SettingsWindow.Actions(
+            addHotkey: { [weak self] in self?.presentAddHotkey() },
+            removeHotkey: { [weak self] hotkey in self?.removeHotkey(hotkey) },
+            cleanupSettingChanged: { [weak self] in self?.refreshCleanupStatus() },
+            dictionaryChanged: { [weak self] in self?.rewarmCleanup() },
+            stylesChanged: { [weak self] in self?.scheduleStyleRewarmIfNeeded() },
+            toggleLaunchAtLogin: { [weak self] in self?.setLaunchAtLogin() ?? false },
+            openSetupGuide: { [weak self] in self?.setup.present() }
+        ))
 
     // Independent readiness signals; the menu-bar state is derived from them.
     private var monitorActive = false
@@ -67,7 +147,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         cleanup.dictionaryProvider = { [weak self] in self?.dictionaryStore.entries ?? [] }
         Log.write("dictionary: \(dictionaryStore.entries.count) entries")
 
-        // No permission prompts at launch — the onboarding window owns them,
+        // No permission prompts at launch — the setup window owns them,
         // one user-initiated prompt per row instead of a dialog pile-up.
         // (Three SEPARATE permissions: Microphone to record, Input Monitoring
         // for the CGEventTap to RECEIVE the hotkey, Accessibility to TYPE the
@@ -81,30 +161,93 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshState()
         // Live status, not a "first run" flag: also rescues users whose grants
         // were invalidated (e.g. by a re-signed build). Mic alone doesn't force
-        // the window — its own system prompt fires on the first dictation.
-        if permissions.needsSetup { onboarding.present() }
+        // the window — its own system prompt fires on the first dictation. The
+        // speech model missing also forces it (the app is inert without it);
+        // Ollama/cleanup missing alone never does — it's optional-by-design.
+        if permissions.needsSetup || speechInstaller.installedFolder() == nil {
+            setup.present()
+        }
         refreshCleanupStatus()
         // Track Ollama coming and going while we're idle (cheap localhost
         // call), so the blue/green icon doesn't go stale.
         cleanupPollTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
-            self?.refreshCleanupStatus()
+            // Scheduled-timer body runs on the main run loop; assert the
+            // isolation so this `@Sendable` closure can touch the main-actor
+            // `AppDelegate`.
+            MainActor.assumeIsolated { self?.refreshCleanupStatus() }
         }
 
-        // Load the speech model off the main thread (separately).
+        // Pre-warm the cleanup prompt for the app the user switches into: if its
+        // resolved writing style differs from what's prefilled, warm the new
+        // one (debounced) so the next dictation's cleanup is already prepared.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self, selector: #selector(activeAppChanged),
+            name: NSWorkspace.didActivateApplicationNotification, object: nil)
+
+        // Get the speech model ready: load an already-downloaded copy, else
+        // download it (with visible progress in the setup window) then load.
+        startSpeechModelSetup()
+    }
+
+    /// Entry point for readying the speech model. Uses the on-disk copy if the
+    /// installer reports a complete folder; otherwise kicks off a download whose
+    /// progress the setup window shows, loading once it lands. Also the retry
+    /// hook for the setup window's speech-model row.
+    private func startSpeechModelSetup() {
+        if let folder = speechInstaller.installedFolder() {
+            speechInstaller.markInstalled()
+            loadTranscriber(from: folder)
+        } else {
+            speechInstaller.startDownload(onReady: { [weak self] folder in
+                self?.loadTranscriber(from: folder)
+            })
+        }
+    }
+
+    /// Compiles/loads WhisperKit from a ready model folder off the main thread,
+    /// flipping `modelReady` and the installer's phase when it finishes.
+    private func loadTranscriber(from folder: URL) {
+        speechInstaller.markLoading()
         Task {
             do {
                 let t = try await Transcriber(
-                    model: config.whisperModel,
+                    modelFolder: folder,
                     minimumTranscribableSamples: config.audio.minimumTranscribableSamples)
                 await MainActor.run {
                     self.transcriber = t
                     self.modelReady = true
+                    self.speechInstaller.markInstalled()
                     Log.write("model loaded")
                     self.refreshState()
                 }
             } catch {
-                await MainActor.run { Log.write("model load FAILED: \(error)") }
+                await MainActor.run {
+                    self.speechInstaller.markFailed(error.localizedDescription)
+                    Log.write("model load FAILED: \(error)")
+                }
             }
+        }
+    }
+
+    /// Request-then-deep-link dispatch for one setup permission row, copied
+    /// verbatim from the old `OnboardingWindow.rowButtonClicked`: the mic's first
+    /// tap fires the system prompt (Settings after), the other two request (to
+    /// register zwisp in the list) then open the relevant Settings pane.
+    private func handlePermissionTapped(_ permission: OnboardingPermission) {
+        let status = probe.state().status(of: permission)
+        switch permission {
+        case .microphone:
+            if status == .notGranted {
+                probe.requestMicAccess()
+            } else {
+                probe.openMicrophoneSettings()
+            }
+        case .inputMonitoring:
+            probe.requestInputMonitoring()
+            probe.openInputMonitoringSettings()
+        case .accessibility:
+            probe.promptAccessibility()
+            probe.openAccessibilitySettings()
         }
     }
 
@@ -141,10 +284,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Poll so that granting the missing permission while the app runs
             // takes effect without a manual relaunch.
             retryTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
-                guard let self, !self.monitorActive else { return }
-                Log.write("polling: inputMonitoring=\(self.hasInputMonitoring()) accessibility=\(AXIsProcessTrusted())")
-                self.startHotkeyMonitor()
-                self.refreshState()
+                // Scheduled-timer body runs on the main run loop; assert the
+                // isolation so this `@Sendable` closure can touch the main-actor
+                // `AppDelegate`.
+                MainActor.assumeIsolated {
+                    guard let self, !self.monitorActive else { return }
+                    Log.write("polling: inputMonitoring=\(self.hasInputMonitoring()) accessibility=\(AXIsProcessTrusted())")
+                    self.startHotkeyMonitor()
+                    self.refreshState()
+                }
             }
         }
     }
@@ -165,10 +313,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         case .denied:
             Log.write("microphone access denied; showing setup guide")
-            onboarding.present()
+            setup.present()
             return
         case .granted:
             break
+        }
+        // Eager style warm: the frontmost window title may have changed (a
+        // browser tab switch) without a `didActivateApplication` notification,
+        // so re-resolve now and prefill the new style — this prefill races the
+        // user's speech and is usually done before they release the key.
+        let style = currentResolvedStyle()
+        if style != lastWarmedStyle {
+            lastWarmedStyle = style
+            Task { await cleanup.warmUp(style: style) }
         }
         isRecording = true
         recorder.start()
@@ -197,9 +354,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             refreshState()
             return
         }
-        // Remember where the user dictated, so a slow cleanup can't type the
-        // result into whatever app they switched to in the meantime.
-        let targetPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        // Snapshot the frontmost app once, at record time: its PID (so a slow
+        // cleanup can't type the result into whatever app the user switched to
+        // in the meantime) and the writing style resolved from its bundle ID +
+        // focused-window title. Resolving here freezes the style against a focus
+        // change during transcription. (`resolve` returns `.standard` when there
+        // are no rules / no match, so the default setup pays only a cheap AX
+        // read and no style block is added.)
+        let context = FrontmostContext.capture()
+        let targetPID = context.pid
+        let style = styleRuleStore.resolve(bundleID: context.bundleID,
+                                           windowTitle: context.windowTitle)
         jobsInFlight += 1
         refreshState()
 
@@ -208,13 +373,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pipelineTail = Task { [weak self] in
             await previous?.value
             await self?.process(samples: samples, with: transcriber, targetPID: targetPID,
-                                worker: worker)
+                                style: style, worker: worker)
         }
     }
 
     /// One dictation's trip through the pipeline: transcribe → clean → inject.
     private func process(samples: [Float], with transcriber: Transcriber,
-                         targetPID: pid_t?, worker: StreamingWorker?) async {
+                         targetPID: pid_t?, style: WritingStyle,
+                         worker: StreamingWorker?) async {
         // Per-stage timings, so "dictation felt slow" is attributable from the
         // log to transcription vs cleanup (whose own breakdown Ollama reports).
         let transcribeStart = Date()
@@ -223,8 +389,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Log.write(String(format: "raw transcript (%.2fs%@): '%@'",
                          Date().timeIntervalSince(transcribeStart),
                          result.streamed ? ", streamed" : "", raw))
+        if style != .standard {
+            Log.write("writing style: \(style.rawValue)")
+        }
         let cleanupStart = Date()
-        let text = await cleanup.clean(raw)
+        let text = await cleanup.clean(raw, style: style)
         Log.write(String(format: "final text (%.2fs): '%@'",
                          Date().timeIntervalSince(cleanupStart), text))
         // Deterministic dictionary pass, applied last so it covers every path
@@ -343,10 +512,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // system prompt now, so the next dictation's cleanup is warm
                 // instead of paying a multi-second cold start.
                 if case .active = status {
-                    Task { await self.cleanup.warmUp() }
+                    Task { await self.cleanup.warmUp(style: self.lastWarmedStyle) }
                 }
             }
         }
+    }
+
+    // MARK: - Writing styles
+
+    /// The writing style for the current frontmost app. Short-circuits to
+    /// `.standard` — with NO Accessibility/`FrontmostContext` call — when the
+    /// user has no rules and the default is standard, so the default setup never
+    /// pays for a window-title read on every app switch.
+    private func currentResolvedStyle() -> WritingStyle {
+        if styleRuleStore.rules.isEmpty, styleRuleStore.defaultStyle == .standard {
+            return .standard
+        }
+        let context = FrontmostContext.capture()
+        return styleRuleStore.resolve(bundleID: context.bundleID,
+                                      windowTitle: context.windowTitle)
+    }
+
+    @objc private func activeAppChanged() {
+        scheduleStyleRewarmIfNeeded()
+    }
+
+    /// Re-resolves the current style and, if it differs from what's prefilled,
+    /// debounces (~1 s) a warm-up of the new style's system prompt. Fired on app
+    /// switches and when the style rules change from Settings.
+    private func scheduleStyleRewarmIfNeeded() {
+        let style = currentResolvedStyle()
+        guard style != lastWarmedStyle else { return }
+        styleRewarmWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.lastWarmedStyle = style
+            Task { await self.cleanup.warmUp(style: style) }
+        }
+        styleRewarmWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: work)
     }
 
     // MARK: - Menu bar
@@ -355,6 +559,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "zwisp", action: nil, keyEquivalent: ""))
+        menu.addItem(.separator())
+
+        // The unified Settings window — everything the submenus expose, in one
+        // place. ⌘, matches the platform convention.
+        let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings),
+                                      keyEquivalent: ",")
+        menu.addItem(settingsItem)
         menu.addItem(.separator())
 
         // Hotkeys submenu — rebuilt each time it opens (see menuNeedsUpdate).
@@ -436,15 +647,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         guard let models, !models.isEmpty else {
             if models == nil {
-                // Not reachable — offer to start it right from the menu.
-                let item = NSMenuItem(title: "Ollama isn't running — click to start",
-                                      action: #selector(startOllama), keyEquivalent: "")
-                item.target = self
-                cleanupMenu.insertItem(item, at: index)
+                // Server not reachable. If Ollama IS installed, offer to start
+                // it right from the menu; if it isn't installed at all, send the
+                // user to the setup window's guided install-Ollama chain.
+                if ollamaInstaller.installedAppURL() != nil {
+                    let item = NSMenuItem(title: "Ollama isn't running — click to start",
+                                          action: #selector(startOllama), keyEquivalent: "")
+                    item.target = self
+                    cleanupMenu.insertItem(item, at: index)
+                } else {
+                    let item = NSMenuItem(title: "Set up AI cleanup…",
+                                          action: #selector(showOnboarding), keyEquivalent: "")
+                    item.target = self
+                    cleanupMenu.insertItem(item, at: index)
+                }
             } else {
-                let item = NSMenuItem(title: "No models installed (ollama pull …)",
-                                      action: nil, keyEquivalent: "")
-                item.isEnabled = false
+                // Server is up but the model isn't pulled — the setup window's
+                // cleanup chain pulls the recommended one with progress.
+                let item = NSMenuItem(title: "Set up cleanup model…",
+                                      action: #selector(showOnboarding), keyEquivalent: "")
+                item.target = self
                 cleanupMenu.insertItem(item, at: index)
             }
             return
@@ -520,7 +742,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch dictionaryStore.add(field.stringValue) {
         case .added, .updated:
             Log.write("dictionary: added '\(field.stringValue)' via menu")
-            rewarmCleanupAfterDictionaryChange()
+            rewarmCleanup()
         case .duplicate:
             break  // already known — nothing to do
         case .rejected:
@@ -537,62 +759,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func removeDictionaryEntry(_ sender: NSMenuItem) {
         dictionaryStore.remove(sender.title)
         Log.write("dictionary: removed '\(sender.title)'")
-        rewarmCleanupAfterDictionaryChange()
+        rewarmCleanup()
     }
 
-    /// The dictionary is part of the cleanup system prompt, so any change
-    /// invalidates the prefilled KV cache. Re-warm immediately — going through
-    /// `refreshCleanupStatus` wouldn't, since warm-up only fires there on a
-    /// status *transition* and the status hasn't changed.
-    private func rewarmCleanupAfterDictionaryChange() {
-        Task { await cleanup.warmUp() }
+    /// The personal dictionary *and* the writing-style block are both part of
+    /// the cleanup system prompt, so any change to either invalidates the
+    /// prefilled KV cache. Re-warm the last-warmed style immediately — going
+    /// through `refreshCleanupStatus` wouldn't, since warm-up only fires there
+    /// on a status *transition* and the status hasn't changed.
+    private func rewarmCleanup() {
+        Task { await cleanup.warmUp(style: lastWarmedStyle) }
     }
 
-    /// User clicked "Ollama isn't running — click to start". Try, in order:
-    /// the Ollama.app bundle (menu-bar app; also registers itself at login),
-    /// the CLI (`ollama serve`, detached so it outlives zwisp), and finally
-    /// the download page for people who don't have Ollama at all.
+    /// User clicked "Ollama isn't running — click to start" (or the setup
+    /// window's "Start Ollama…"). The launch strategies (app bundle, CLI
+    /// `ollama serve`) now live in `OllamaInstaller.launchServer()`; here we just
+    /// fire it and re-check the icon soon after instead of waiting out the 30 s
+    /// poll. (This path is only offered when Ollama IS installed; installing it
+    /// from scratch goes through the setup window's cleanup chain.)
     @objc private func startOllama() {
-        // The server takes a moment to boot; re-check the icon soon after
-        // instead of waiting for the 30 s poll.
         for delay in [3.0, 8.0] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                 self?.refreshCleanupStatus()
             }
         }
-        let appURL = ["com.ollama.ollama", "com.electron.ollama"]
-            .compactMap { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) }
-            .first
-            ?? Self.existingURL("/Applications/Ollama.app")
-        if let appURL {
-            let configuration = NSWorkspace.OpenConfiguration()
-            configuration.activates = false   // background server app; keep focus
-            NSWorkspace.shared.openApplication(at: appURL, configuration: configuration)
-            Log.write("launched Ollama.app at \(appURL.path)")
-            return
-        }
-
-        if let cli = ["/opt/homebrew/bin/ollama", "/usr/local/bin/ollama"]
-            .first(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
-            // Detach fully so the server isn't tied to zwisp's lifetime.
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/bin/sh")
-            process.arguments = ["-c", "nohup \(cli) serve >/dev/null 2>&1 &"]
-            do {
-                try process.run()
-                Log.write("started '\(cli) serve' (detached)")
-            } catch {
-                Log.write("failed to start ollama serve: \(error)")
-            }
-            return
-        }
-
-        NSWorkspace.shared.open(URL(string: "https://ollama.com/download")!)
-        Log.write("Ollama not found; opened download page")
-    }
-
-    private static func existingURL(_ path: String) -> URL? {
-        FileManager.default.fileExists(atPath: path) ? URL(fileURLWithPath: path) : nil
+        ollamaInstaller.launchServer()
     }
 
     @objc private func toggleCleanup(_ sender: NSMenuItem) {
@@ -602,13 +793,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func toggleLaunchAtLogin(_ sender: NSMenuItem) {
+        sender.state = setLaunchAtLogin() ? .on : .off
+    }
+
+    /// Flips the Launch-at-Login registration and returns the resulting state.
+    /// Shared by the menu item and the Settings toggle (the frozen
+    /// `Actions.toggleLaunchAtLogin` contract) so both reflect the same result.
+    @discardableResult
+    private func setLaunchAtLogin() -> Bool {
         do {
             if SMAppService.mainApp.status == .enabled {
                 try SMAppService.mainApp.unregister()
-                sender.state = .off
+                return false
             } else {
                 try SMAppService.mainApp.register()
-                sender.state = .on
+                return true
             }
         } catch {
             NSLog("zwisp: launch-at-login toggle failed: \(error)")
@@ -616,6 +815,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             alert.messageText = "Couldn't change Launch at Login"
             alert.informativeText = "\(error.localizedDescription)\n\nMake sure zwisp is in your Applications folder."
             alert.runModal()
+            return SMAppService.mainApp.status == .enabled
         }
     }
 
@@ -694,7 +894,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         probe.openMicrophoneSettings()
     }
 
-    @objc private func showOnboarding() { onboarding.present() }
+    @objc private func showOnboarding() { setup.present() }
+
+    @MainActor @objc private func openSettings() { settings.present() }
 }
 
 // MARK: - Hotkey management
@@ -739,7 +941,11 @@ extension AppDelegate: NSMenuDelegate {
         menu.addItem(add)
     }
 
-    @objc private func addHotkeyClicked() {
+    @objc private func addHotkeyClicked() { presentAddHotkey() }
+
+    /// Shared hotkey-capture flow for both the Hotkeys menu and the Settings
+    /// window (`Actions.addHotkey`).
+    private func presentAddHotkey() {
         guard monitorActive, let monitor = hotkeyMonitor else {
             presentPermissionNeededAlert()
             return
@@ -754,12 +960,19 @@ extension AppDelegate: NSMenuDelegate {
             let added = self.hotkeyStore.add(hotkey)
             self.hotkeyMonitor?.update(hotkeys: self.hotkeyStore.hotkeys)
             Log.write("hotkey \(added ? "added" : "already set"): \(hotkey.name)")
+            Task { @MainActor in self.settings.refresh() }
         }
     }
 
     @objc private func removeHotkeyClicked(_ sender: NSMenuItem) {
         guard let raw = (sender.representedObject as? NSNumber)?.uint64Value,
               let hotkey = Hotkey(rawValue: raw) else { return }
+        removeHotkey(hotkey)
+    }
+
+    /// Removes a hotkey and re-arms the live monitor. Shared by the menu and the
+    /// Settings window (`Actions.removeHotkey`).
+    private func removeHotkey(_ hotkey: Hotkey) {
         hotkeyStore.remove(hotkey)
         hotkeyMonitor?.update(hotkeys: hotkeyStore.hotkeys)
         Log.write("hotkey removed: \(hotkey.name)")

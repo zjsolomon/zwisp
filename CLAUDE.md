@@ -35,18 +35,25 @@ WhisperKit/CoreML. **Keep this split when adding code.**
 - **`Sources/ZwispCore/`** — pure domain logic, *zero external dependencies*. Unit-tested.
   Put testable logic here. Files: `Configuration.swift` (all tunable settings in one place),
   `MenuBarState.swift`, `OnboardingState.swift` (permission checklist model + copy),
-  `Hotkey.swift`, `HotkeyStore.swift`, `CleanupService.swift` (Ollama cleanup),
-  `DictionaryStore.swift` (personal dictionary persistence), `TranscriptCorrector.swift`
-  (deterministic dictionary post-pass), `StreamingTranscript.swift` (streaming confirmation
-  state machine), `AudioPadding.swift`, `TextInjector.swift`, `TranscriptFormatter.swift`,
-  `Logger.swift`.
+  `SetupState.swift` (composes the permission checklist with the three `InstallPhase`s +
+  chain-button copy), `OllamaPull.swift` (tolerant `/api/pull` JSON-lines parser +
+  monotonic progress accumulator), `SpeechModelLayout.swift` (WhisperKit's on-disk model
+  path + completeness check), `Hotkey.swift`, `HotkeyStore.swift`, `CleanupService.swift`
+  (Ollama cleanup; also the `pullModel` streaming seam), `DictionaryStore.swift` (personal
+  dictionary persistence), `TranscriptCorrector.swift` (deterministic dictionary post-pass),
+  `StreamingTranscript.swift` (streaming confirmation state machine), `AudioPadding.swift`,
+  `TextInjector.swift`, `TranscriptFormatter.swift`, `Logger.swift`.
 - **`Sources/zwisp/`** — the executable: system-framework + WhisperKit glue on top of the
   core. Not unit-tested. Files: `main.swift`, `AppDelegate.swift` (wires everything, owns the
-  status item), `HotkeyMonitor.swift` (global `CGEventTap`), `HotkeyCapturePanel.swift`,
-  `AudioRecorder.swift` (`AVAudioEngine` → 16 kHz mono Float32), `Transcriber.swift`
-  (WhisperKit wrapper; an actor that serializes all WhisperKit calls), `StreamingWorker.swift`
+  status item; `@MainActor`), `HotkeyMonitor.swift` (global `CGEventTap`),
+  `HotkeyCapturePanel.swift`, `AudioRecorder.swift` (`AVAudioEngine` → 16 kHz mono Float32),
+  `Transcriber.swift` (WhisperKit wrapper; an actor that serializes all WhisperKit calls —
+  now takes a ready `modelFolder`, the installer owns the download), `StreamingWorker.swift`
   (eager transcription loop while the key is held), `PermissionProbe.swift` (live permission
-  status + Settings deep links), `OnboardingWindow.swift` (first-run permission checklist).
+  status + Settings deep links), `SpeechModelInstaller.swift` (downloads the WhisperKit model
+  with progress), `OllamaInstaller.swift` (installs Ollama + pulls the cleanup model),
+  `SetupWindow.swift`/`SetupModel.swift`/`SetupView.swift` (the SwiftUI first-run setup trio,
+  replacing the old `OnboardingWindow`).
 - **`Tests/ZwispCoreTests/`** — tests for the core library only.
 
 **Rule (from README/Contributing): new logic goes in `ZwispCore` with a test** so it stays
@@ -57,10 +64,22 @@ covered by CI. The app layer should stay a thin glue layer.
 - **Three separate macOS permissions**, easy to confuse: **Microphone** (record), **Input
   Monitoring** (CGEventTap to *receive* the hotkey), **Accessibility** (to *type* text into
   other apps). **Launch no longer fires permission prompts** — they're user-initiated from
-  the onboarding window (`OnboardingWindow.swift`, auto-shown while a hotkey permission is
-  missing; reopenable via the menu's "Setup Guide…"), and the mic prompt fires on the first
-  dictation attempt. Live status checks + deep links live in `PermissionProbe.swift`; the
-  pure checklist model (`OnboardingState`, row copy, `needsSetup`) lives in core with tests.
+  the setup window (`SetupWindow`/`SetupModel`/`SetupView`, a SwiftUI trio; reopenable via the
+  menu's "Setup Guide…"), and the mic prompt fires on the first dictation attempt. The setup
+  window is now all-encompassing, not just a permission checklist: it also **downloads the
+  speech model with visible progress** (`SpeechModelInstaller` → `WhisperKit.download`, then
+  `Transcriber(modelFolder:)` — the app no longer relies on WhisperKit's invisible first-use
+  fetch), and offers an **optional AI-cleanup chain** (`OllamaInstaller`): install Ollama from
+  the official signed zip (`ditto -xk`, then `codesign --verify --deep --strict` + bundle-ID
+  check *before* it's ever launched — never strip quarantine, never `spctl`), start its
+  server, and pull the recommended cleanup model via `/api/pull` streaming
+  (`CleanupService.pullModel` + core `OllamaPull`). **Auto-show gate = hotkey permissions
+  missing OR the speech model isn't on disk** (`permissions.needsSetup ||
+  speechInstaller.installedFolder() == nil`); Ollama/cleanup missing alone **never** auto-shows
+  (it's optional — don't nag about a multi-GB download). Live status checks + deep links live
+  in `PermissionProbe.swift`; the pure checklist model (`OnboardingState`, row copy,
+  `needsSetup`) plus `SetupState`/`InstallPhase`/`SpeechModelLayout`/`OllamaPull` live in core
+  with tests. `AppDelegate` is `@MainActor` (it owns the main-actor installers + setup window).
 - **Only modifier keys** (⌘ ⌥ ⌃ ⇧ Fn) can be hotkeys — held while talking, don't auto-repeat.
   Left/right modifiers are distinct. Default is Right ⌘ (`HotkeyStore.defaultHotkeys`).
 - **Fn/Globe needs keycode filtering**: arrow, Home/End, and Page keys also set the Fn flag bit,
@@ -92,10 +111,11 @@ covered by CI. The app layer should stay a thin glue layer.
   `~/Library/Logs/zwisp.log` (transcribe/cleanup seconds, plus Ollama's load/prefill/generate
   breakdown) — check there first when dictation "feels slow".
 - **Personal dictionary lives in the cleanup *system* prompt** (rendered by
-  `Configuration.Cleanup.systemPrompt(base:dictionary:)`) so `warmUp()` prefills it once —
-  and any dictionary change invalidates that KV cache, so `AppDelegate` must re-fire
-  `cleanup.warmUp()` after every add/remove (`refreshCleanupStatus` won't: it only warms on a
-  status *transition*). The deterministic `TranscriptCorrector` pass is applied at exactly one
+  `Configuration.Cleanup.systemPrompt(base:dictionary:style:)`) so `warmUp(style:)` prefills it
+  once — and any dictionary *or writing-style* change invalidates that KV cache, so `AppDelegate`
+  must re-fire `cleanup.warmUp(style:)` after it (`AppDelegate.rewarmCleanup()`, called after every
+  dictionary add/remove and from the Settings `stylesChanged` action; `refreshCleanupStatus` won't:
+  it only warms on a status *transition*). The deterministic `TranscriptCorrector` pass is applied at exactly one
   seam — after `cleanup.clean` in `AppDelegate.process` — which covers batch, streamed,
   cleanup-off, and every fallback path; don't add a second application site. Its thresholds
   are deliberately conservative (short entries never fuzzy-match) — a wrong "correction" is
@@ -106,6 +126,29 @@ covered by CI. The app layer should stay a thin glue layer.
   `pbs -flush`, enabling it in `pbs NSServicesStatus`, and assigning shortcuts — don't
   re-attempt Services without new evidence (also beware: macOS Sequoia's window tiling
   claimed most ⌃⌥⌘ shortcut combos, and Services can't tell left/right modifiers apart).
+- **Per-app writing styles** steer cleanup into `.standard`/`.formal`/`.casual` per frontmost app.
+  All steering is in the cleanup *system* prompt: the style `promptBlock` is appended **LAST**
+  (after the base prompt and the dictionary block) so Ollama's longest-common-prefix KV reuse
+  reprefills only the short style suffix on a switch — keep that ordering in
+  `Configuration.Cleanup.systemPrompt`. Style is `WritingStyle` + `StyleRuleStore`/`StyleResolver`
+  (core, tested); rules match on bundle ID plus an optional window-title substring (a title rule
+  beats a bare rule). The style is **resolved once at record time** in `AppDelegate.stopAndTranscribe`
+  via `FrontmostContext.capture()` (app layer: `NSWorkspace` + the Accessibility API for the focused
+  window title — any AX failure degrades to `windowTitle = nil`, never prompts) and threaded through
+  `process(…style:)` → `cleanup.clean(_:style:)`, so a focus change mid-transcription can't apply the
+  wrong style. To keep the prefill off the dictation's critical path, `AppDelegate` **warms the style
+  ahead of time**: `scheduleStyleRewarmIfNeeded()` on `NSWorkspace.didActivateApplicationNotification`
+  (debounced ~1 s) plus an eager warm at `startRecording` (covers browser-tab/title-rule changes the
+  app-switch notification can't see). `currentResolvedStyle()` **short-circuits to `.standard` with no
+  AX call** when there are no rules and the default is standard — the default setup pays nothing.
+  `lastWarmedStyle` tracks what's prefilled; only a *changed* style triggers a warm.
+- **Settings window** (`SettingsWindow`/`SettingsModel`/`SettingsView`) is the one place to manage
+  hotkeys, cleanup, dictionary, and writing-style rules — SwiftUI in an `NSHostingController`, same
+  accessory-app lifecycle as `OnboardingWindow`. It's `@MainActor`; `AppDelegate` holds it as a
+  `@MainActor private lazy var` and talks to it only through the **frozen `SettingsWindow.Actions`
+  API** (closures back into `AppDelegate` for the actual mutations, so menu and window share one code
+  path — e.g. `presentAddHotkey`, `removeHotkey`, `setLaunchAtLogin`). Opened from the menu-bar
+  "Settings…" item (⌘,). The old submenus still work.
 - WhisperKit downloads the model from Hugging Face on first use (internet once), then runs
   offline. Transcription is **streamed while the key is held**: `StreamingWorker` re-transcribes
   the growing buffer (~1 s cadence) with `clipTimestamps` skipping confirmed audio, and

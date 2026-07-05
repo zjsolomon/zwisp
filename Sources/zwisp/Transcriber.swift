@@ -17,10 +17,17 @@ actor Transcriber {
     private let minimumSamples: Int
     private var tail: Task<Void, Never>?
 
-    init(model: String, minimumTranscribableSamples: Int) async throws {
-        // prewarm: pay CoreML/ANE specialization at load time (menu bar already
-        // shows "loading") instead of on the first dictation.
-        let config = WhisperKitConfig(model: model, prewarm: true)
+    /// Loads WhisperKit from an already-downloaded model folder. The download is
+    /// no longer this type's job — `SpeechModelInstaller` fetches the model
+    /// (with visible progress) and hands us the folder — so we point
+    /// `WhisperKitConfig` at it directly and skip the network entirely.
+    ///
+    /// `prewarm: true` pays CoreML/ANE specialization at load time (the menu bar
+    /// already shows "loading") instead of on the first dictation. With
+    /// `modelFolder` set, `load` defaults to true, so this initializer both
+    /// loads and warms the model in one shot.
+    init(modelFolder: URL, minimumTranscribableSamples: Int) async throws {
+        let config = WhisperKitConfig(modelFolder: modelFolder.path, prewarm: true)
         whisperKit = try await WhisperKit(config)
         minimumSamples = minimumTranscribableSamples
     }

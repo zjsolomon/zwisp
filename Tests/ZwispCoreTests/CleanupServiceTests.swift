@@ -398,4 +398,205 @@ struct CleanupServiceTests {
         // It instructs the model to clean rather than answer.
         #expect(wrapped.lowercased().contains("do not answer"))
     }
+
+    // MARK: - writing styles
+
+    private func system(of request: URLRequest) throws -> String {
+        let body = try #require(request.httpBody)
+        let object = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        return try #require(object["system"] as? String)
+    }
+
+    private func prompt(of request: URLRequest) throws -> String {
+        let body = try #require(request.httpBody)
+        let object = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        return try #require(object["prompt"] as? String)
+    }
+
+    @Test func casualRequestCarriesCasualBlockAndDropsPunctuateOpener() throws {
+        let service = makeService(FakeClient(result: .failure(URLError(.badURL))))
+        let request = service.buildRequest(for: "hey whats up", style: .casual)
+
+        #expect(try system(of: request).contains("CASUAL CHAT"))
+        // The casual opener replaces "Punctuate and case", which would fight the
+        // lowercase counter-examples.
+        #expect(try !prompt(of: request).contains("Punctuate and case"))
+        #expect(try prompt(of: request).contains("casual chat style"))
+    }
+
+    @Test func standardStyleRequestIsByteIdenticalToNoStyleCall() throws {
+        let service = makeService(FakeClient(result: .failure(URLError(.badURL))))
+        service.dictionaryProvider = { ["Zied"] }
+
+        let noStyle = service.buildRequest(for: "hello there")
+        let standard = service.buildRequest(for: "hello there", style: .standard)
+        #expect(try system(of: standard) == system(of: noStyle))
+        #expect(try prompt(of: standard) == prompt(of: noStyle))
+    }
+
+    @Test func warmupAndCleanShareTheSameSystemPromptForAStyle() throws {
+        // The cache-sharing contract: warm-up must prefill the exact system
+        // prompt real requests use, per style, or the prefill is wasted.
+        let service = makeService(FakeClient(result: .failure(URLError(.badURL))))
+        service.dictionaryProvider = { ["Zied"] }
+
+        #expect(try system(of: service.buildWarmupRequest(style: .formal))
+                == system(of: service.buildRequest(for: "hello", style: .formal)))
+    }
+
+    // MARK: - sanitize is style-safe
+
+    @Test func sanitizePassesAllLowercaseCasualOutput() {
+        // Casual output is all lowercase with no trailing period; the
+        // conservation check normalizes case, so retention still holds.
+        let raw = "hey can you send me the link to the doc"
+        let casual = "hey can you send me the link to the doc"
+        #expect(CleanupService.sanitize(casual, raw: raw) == casual)
+        #expect(CleanupService.retainedWordFraction(raw: raw, cleaned: casual) >= 0.7)
+    }
+
+    @Test func sanitizePassesFormalOutputWithParagraphBreaks() {
+        // Formal output introduces \n\n paragraph breaks and a sign-off line;
+        // added whitespace can't hurt word retention or bust the length cap.
+        let raw = "hi sarah just wanted to follow up on the contract could you send the signed copy by friday thanks zied"
+        let formal = "Hi Sarah,\n\nJust wanted to follow up on the contract. Could you send the signed copy by Friday?\n\nThanks,\nZied"
+        #expect(CleanupService.sanitize(formal, raw: raw) == formal)
+    }
+
+    // MARK: - pullModel()
+
+    /// A fake HTTP client that scripts a `/api/pull` line stream and records the
+    /// request, so pull behaviour is tested offline and deterministically. It
+    /// overrides `lines(for:)` (the streaming seam) directly rather than going
+    /// through the buffered default.
+    private final class StreamingFakeClient: HTTPClient, @unchecked Sendable {
+        let scriptedLines: [String]
+        let status: Int
+        let transportError: Error?
+        private(set) var capturedRequest: URLRequest?
+
+        init(scriptedLines: [String], status: Int = 200, transportError: Error? = nil) {
+            self.scriptedLines = scriptedLines
+            self.status = status
+            self.transportError = transportError
+        }
+
+        func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+            // The pull path uses lines(for:), never this.
+            throw URLError(.unsupportedURL)
+        }
+
+        func lines(for request: URLRequest) async throws -> (AsyncThrowingStream<String, Error>, URLResponse) {
+            capturedRequest = request
+            if let transportError { throw transportError }
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!
+            let lines = scriptedLines
+            let stream = AsyncThrowingStream<String, Error> { continuation in
+                for line in lines { continuation.yield(line) }
+                continuation.finish()
+            }
+            return (stream, response)
+        }
+    }
+
+    /// Collects `onProgress` callbacks, which fire from the streaming reader's
+    /// context (hence `@Sendable`), for assertions after the pull completes.
+    private final class ProgressRecorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _fractions: [Double?] = []
+        var fractions: [Double?] { lock.lock(); defer { lock.unlock() }; return _fractions }
+        func record(_ fraction: Double?) {
+            lock.lock(); defer { lock.unlock() }
+            _fractions.append(fraction)
+        }
+    }
+
+    private let successLines = [
+        #"{"status":"pulling manifest"}"#,
+        #"{"status":"pulling a","digest":"a","total":100,"completed":50}"#,
+        #"{"status":"pulling a","digest":"a","total":100,"completed":100}"#,
+        #"{"status":"success"}"#,
+    ]
+
+    @Test func pullTargetsPullEndpointWithModelAndStreamBody() async throws {
+        let client = StreamingFakeClient(scriptedLines: successLines)
+        let service = makeService(client)
+
+        try await service.pullModel("qwen3:4b-instruct") { _, _ in }
+
+        let request = try #require(client.capturedRequest)
+        #expect(request.url == Configuration.Cleanup().pullEndpoint)
+        #expect(request.httpMethod == "POST")
+        let body = try #require(request.httpBody)
+        let object = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        #expect(object["model"] as? String == "qwen3:4b-instruct")
+        #expect(object["stream"] as? Bool == true)
+    }
+
+    @Test func pullReportsMonotonicProgressThenSucceeds() async throws {
+        let service = makeService(StreamingFakeClient(scriptedLines: successLines))
+        let recorder = ProgressRecorder()
+
+        try await service.pullModel("m") { _, fraction in recorder.record(fraction) }
+
+        // Manifest line has no totals (indeterminate), then 50% then 100%.
+        #expect(recorder.fractions == [nil, 0.5, 1.0])
+    }
+
+    @Test func pullThrowsOnErrorLine() async {
+        let lines = [
+            #"{"status":"pulling manifest"}"#,
+            #"{"error":"model \"nope\" not found"}"#,
+        ]
+        let service = makeService(StreamingFakeClient(scriptedLines: lines))
+        await #expect(throws: CleanupService.PullError.server(#"model "nope" not found"#)) {
+            try await service.pullModel("nope") { _, _ in }
+        }
+    }
+
+    @Test func pullThrowsBadStatusOnNon200() async {
+        let service = makeService(StreamingFakeClient(scriptedLines: [], status: 500))
+        await #expect(throws: CleanupService.PullError.badStatus(500)) {
+            try await service.pullModel("m") { _, _ in }
+        }
+    }
+
+    @Test func pullThrowsTruncatedWhenStreamEndsWithoutSuccess() async {
+        // The stream stops before "success" — a partial pull, not a completed one.
+        let lines = [
+            #"{"status":"pulling manifest"}"#,
+            #"{"status":"pulling a","digest":"a","total":100,"completed":50}"#,
+        ]
+        let service = makeService(StreamingFakeClient(scriptedLines: lines))
+        await #expect(throws: CleanupService.PullError.truncated) {
+            try await service.pullModel("m") { _, _ in }
+        }
+    }
+
+    @Test func pullThrowsUnreachableOnTransportError() async {
+        let service = makeService(StreamingFakeClient(
+            scriptedLines: [], transportError: URLError(.cannotConnectToHost)))
+        await #expect(throws: CleanupService.PullError.unreachable) {
+            try await service.pullModel("m") { _, _ in }
+        }
+    }
+
+    @Test func pullWorksThroughTheDefaultBufferedLinesImplementation() async throws {
+        // The existing buffered FakeClient has no lines() of its own; the
+        // protocol-extension default must split its body into lines so the pull
+        // still sees progress and success.
+        let body = successLines.joined(separator: "\n")
+        let service = makeService(FakeClient(result: .success((json(body), response(200)))))
+        let recorder = ProgressRecorder()
+
+        try await service.pullModel("m") { _, fraction in recorder.record(fraction) }
+        #expect(recorder.fractions == [nil, 0.5, 1.0])
+    }
+
+    @Test func pullEndpointPreservesCustomHostAndPort() {
+        let config = Configuration.Cleanup(
+            endpoint: URL(string: "http://192.168.1.5:9999/api/generate")!)
+        #expect(config.pullEndpoint == URL(string: "http://192.168.1.5:9999/api/pull")!)
+    }
 }
