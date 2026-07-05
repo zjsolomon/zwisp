@@ -71,18 +71,25 @@ start automatically on every boot — you can toggle that off there any time.
 ## First-run setup (one time)
 
 macOS gates microphone access, global hotkeys, and synthetic typing behind
-separate privacy permissions. Grant these once:
+separate privacy permissions. **zwisp opens a setup guide on first launch** — a
+checklist with one button per permission. Follow the three rows; each flips to ✓
+as you grant it, and the guide tells you when you're ready to dictate. Closed it
+early? Reopen it any time via the menu-bar icon → **Setup Guide…**.
 
-1. **Microphone** — macOS prompts on first launch. Click **Allow**.
+For reference, the three permissions it walks you through:
+
+1. **Microphone** — records your voice while you hold the key. Click **Allow…**
+   in the guide (or macOS prompts on your first dictation).
 2. **Input Monitoring** — System Settings → Privacy & Security → **Input
    Monitoring** → enable **zwisp**. Required to detect your push-to-talk key
    globally.
 3. **Accessibility** — System Settings → Privacy & Security → **Accessibility** →
    enable **zwisp**. Required to type the transcribed text into other apps.
 
-The menu-bar icon turns orange until the hotkey permissions are granted. zwisp
-watches for the grant and starts working within a couple of seconds — no relaunch
-needed. The shortcuts in the menu jump you straight to each Settings pane.
+The menu-bar icon turns orange until the hotkey permissions are granted — hover
+it to see which one is still missing. zwisp watches for the grant and starts
+working within a couple of seconds — no relaunch needed. The shortcuts in the
+menu jump you straight to each Settings pane.
 
 On first use, zwisp downloads the speech model from Hugging Face (the default
 `large-v3-turbo` is ~1.5 GB; lighter models are much smaller — see
@@ -109,7 +116,7 @@ afterwards it runs fully offline.
 | 🟢 Green | Ready to dictate. AI cleanup is off or unavailable, so you get the raw transcript. |
 | 🔵 Blue | Ready to dictate, and AI cleanup is active — transcripts get cleaned up by your Ollama model. |
 | ⚪ Grey | Transcribing a dictation you just finished. |
-| 🟠 Orange | Permissions missing — see [First-run setup](#first-run-setup-one-time). |
+| 🟠 Orange | Permissions missing — hover the icon to see which, and use the menu's **Setup Guide…**. See [First-run setup](#first-run-setup-one-time). |
 
 While you're recording, zwisp's own icon doesn't change: macOS shows its
 orange microphone indicator in the menu bar whenever the mic is live, and

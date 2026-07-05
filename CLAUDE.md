@@ -34,13 +34,15 @@ WhisperKit/CoreML. **Keep this split when adding code.**
 
 - **`Sources/ZwispCore/`** — pure domain logic, *zero external dependencies*. Unit-tested.
   Put testable logic here. Files: `Configuration.swift` (all tunable settings in one place),
-  `MenuBarState.swift`, `Hotkey.swift`, `HotkeyStore.swift`, `CleanupService.swift` (Ollama
-  cleanup), `TextInjector.swift`, `TranscriptFormatter.swift`, `Logger.swift`.
+  `MenuBarState.swift`, `OnboardingState.swift` (permission checklist model + copy),
+  `Hotkey.swift`, `HotkeyStore.swift`, `CleanupService.swift` (Ollama cleanup),
+  `TextInjector.swift`, `TranscriptFormatter.swift`, `Logger.swift`.
 - **`Sources/zwisp/`** — the executable: system-framework + WhisperKit glue on top of the
   core. Not unit-tested. Files: `main.swift`, `AppDelegate.swift` (wires everything, owns the
   status item), `HotkeyMonitor.swift` (global `CGEventTap`), `HotkeyCapturePanel.swift`,
   `AudioRecorder.swift` (`AVAudioEngine` → 16 kHz mono Float32), `Transcriber.swift`
-  (WhisperKit wrapper).
+  (WhisperKit wrapper), `PermissionProbe.swift` (live permission status + Settings deep
+  links), `OnboardingWindow.swift` (first-run permission checklist).
 - **`Tests/ZwispCoreTests/`** — tests for the core library only.
 
 **Rule (from README/Contributing): new logic goes in `ZwispCore` with a test** so it stays
@@ -50,7 +52,11 @@ covered by CI. The app layer should stay a thin glue layer.
 
 - **Three separate macOS permissions**, easy to confuse: **Microphone** (record), **Input
   Monitoring** (CGEventTap to *receive* the hotkey), **Accessibility** (to *type* text into
-  other apps). `AppDelegate` prompts for all three on launch.
+  other apps). **Launch no longer fires permission prompts** — they're user-initiated from
+  the onboarding window (`OnboardingWindow.swift`, auto-shown while a hotkey permission is
+  missing; reopenable via the menu's "Setup Guide…"), and the mic prompt fires on the first
+  dictation attempt. Live status checks + deep links live in `PermissionProbe.swift`; the
+  pure checklist model (`OnboardingState`, row copy, `needsSetup`) lives in core with tests.
 - **Only modifier keys** (⌘ ⌥ ⌃ ⇧ Fn) can be hotkeys — held while talking, don't auto-repeat.
   Left/right modifiers are distinct. Default is Right ⌘ (`HotkeyStore.defaultHotkeys`).
 - **Fn/Globe needs keycode filtering**: arrow, Home/End, and Page keys also set the Fn flag bit,

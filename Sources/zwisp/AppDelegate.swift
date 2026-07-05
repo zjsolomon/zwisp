@@ -1,6 +1,5 @@
 import AppKit
 import ApplicationServices
-import IOKit.hid
 import ServiceManagement
 import ZwispCore
 
@@ -15,6 +14,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotkeyMonitor: HotkeyMonitor?
 
     private let hotkeyStore = HotkeyStore()
+    private let probe = PermissionProbe()
+    private lazy var onboarding = OnboardingWindow(
+        probe: probe, hotkeyStore: hotkeyStore,
+        isModelReady: { [weak self] in self?.modelReady ?? false },
+        onPermissionsGranted: { [weak self] in
+            // Re-arm the tap the moment the last grant lands, instead of
+            // waiting out the 2 s retry poll — so the window's "You're
+            // ready" is true by the time the user reads it.
+            self?.startHotkeyMonitor()
+            self?.refreshState()
+        })
     private let capturePanel = HotkeyCapturePanel()
     private let hotkeysMenu = NSMenu(title: "Hotkeys")
     private let cleanupMenu = NSMenu(title: "AI Cleanup")
@@ -44,20 +54,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Log.write("=== launched; modelName=\(config.whisperModel) ===")
         setupMenuBar()
 
-        // Trigger the microphone permission prompt early.
-        recorder.requestPermission()
-
-        // Two SEPARATE permissions are required:
-        //  - Input Monitoring: for the CGEventTap to RECEIVE the hotkey events.
-        //  - Accessibility:    for TYPING the transcribed text into other apps.
-        // Prompt for both up front, then start listening (independent of model).
-        let trusted = AXIsProcessTrustedWithOptions(
-            [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
-        let inputAccess = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
-        Log.write("accessibility=\(trusted) inputMonitoringRequest=\(inputAccess) inputMonitoring=\(hasInputMonitoring())")
+        // No permission prompts at launch — the onboarding window owns them,
+        // one user-initiated prompt per row instead of a dialog pile-up.
+        // (Three SEPARATE permissions: Microphone to record, Input Monitoring
+        // for the CGEventTap to RECEIVE the hotkey, Accessibility to TYPE the
+        // result into other apps.)
+        let permissions = probe.state()
+        Log.write("permissions: mic=\(permissions.microphone) "
+            + "inputMonitoring=\(permissions.inputMonitoring) "
+            + "accessibility=\(permissions.accessibility)")
         Log.write("hotkeys: \(hotkeyStore.hotkeys.map(\.name).joined(separator: ", "))")
         startHotkeyMonitor()
         refreshState()
+        // Live status, not a "first run" flag: also rescues users whose grants
+        // were invalidated (e.g. by a re-signed build). Mic alone doesn't force
+        // the window — its own system prompt fires on the first dictation.
+        if permissions.needsSetup { onboarding.present() }
         refreshCleanupStatus()
         // Track Ollama coming and going while we're idle (cheap localhost
         // call), so the blue/green icon doesn't go stale.
@@ -82,7 +94,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func hasInputMonitoring() -> Bool {
-        IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeGranted
+        PermissionProbe.inputMonitoringGranted()
     }
 
     private func startHotkeyMonitor() {
@@ -127,6 +139,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func startRecording() {
         Log.write("hotkey down (modelReady=\(modelReady))")
         guard modelReady, transcriber != nil, !isRecording else { return }
+        // Mic permission is user-initiated, not prompted at launch: if it was
+        // never asked (setup window closed early), ask now — recording
+        // proceeds on the next attempt once granted. A denied mic would
+        // "record" silence, so reopen the setup guide instead of failing mute.
+        switch PermissionProbe.microphoneStatus() {
+        case .notGranted:
+            Log.write("microphone not yet requested; firing the system prompt")
+            probe.requestMicAccess()
+            return
+        case .denied:
+            Log.write("microphone access denied; showing setup guide")
+            onboarding.present()
+            return
+        case .granted:
+            break
+        }
         isRecording = true
         recorder.start()
         refreshState()
@@ -230,8 +258,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else if jobsInFlight > 0 {
             setState(.thinking)
         } else {
+            // Probe only when the monitor is down — resting() ignores the
+            // names otherwise, and the probe is three TCC round-trips on the
+            // main thread in the middle of the dictation path.
+            let missing = monitorActive ? [] : probe.state().missingHotkeyPermissionNames
             setState(.resting(monitorActive: monitorActive, modelReady: modelReady,
-                              cleanup: cleanupStatus))
+                              cleanup: cleanupStatus, missingPermissions: missing))
         }
     }
 
@@ -271,6 +303,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                 action: #selector(openInputMonitoring), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Open Microphone Settings…",
                                 action: #selector(openMicrophone), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Setup Guide…",
+                                action: #selector(showOnboarding), keyEquivalent: ""))
         menu.addItem(.separator())
 
         // AI Cleanup submenu — rebuilt each time it opens (see menuNeedsUpdate).
@@ -489,20 +523,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return image
     }
 
+    // The deep links alone don't put zwisp in the Settings lists — the request
+    // calls do (and are silent no-ops once the status is decided). Fire both,
+    // so the pane the user lands on actually has a zwisp row to enable.
+
     @objc private func openAccessibility() {
-        NSWorkspace.shared.open(URL(string:
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
+        probe.promptAccessibility()
+        probe.openAccessibilitySettings()
     }
 
     @objc private func openInputMonitoring() {
-        NSWorkspace.shared.open(URL(string:
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")!)
+        probe.requestInputMonitoring()
+        probe.openInputMonitoringSettings()
     }
 
     @objc private func openMicrophone() {
-        NSWorkspace.shared.open(URL(string:
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")!)
+        probe.requestMicAccess()
+        probe.openMicrophoneSettings()
     }
+
+    @objc private func showOnboarding() { onboarding.present() }
 }
 
 // MARK: - Hotkey management

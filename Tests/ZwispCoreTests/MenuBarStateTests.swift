@@ -5,9 +5,36 @@ import AppKit
 struct MenuBarStateTests {
     @Test func noPermissionWhenMonitorInactive() {
         #expect(MenuBarState.resting(monitorActive: false, modelReady: false,
-                                     cleanup: .off) == .noPermission)
+                                     cleanup: .off) == .noPermission(missing: []))
         #expect(MenuBarState.resting(monitorActive: false, modelReady: true,
-                                     cleanup: .active(model: "m")) == .noPermission)
+                                     cleanup: .active(model: "m")) == .noPermission(missing: []))
+    }
+
+    @Test func noPermissionCarriesTheMissingNames() {
+        #expect(MenuBarState.resting(monitorActive: false, modelReady: true,
+                                     cleanup: .off,
+                                     missingPermissions: ["Input Monitoring"])
+                == .noPermission(missing: ["Input Monitoring"]))
+        // Equality is sensitive to the associated value.
+        #expect(MenuBarState.noPermission(missing: ["Accessibility"])
+                != .noPermission(missing: ["Input Monitoring"]))
+    }
+
+    @Test func noPermissionLabelNamesTheMissingPermissions() {
+        // Exactly the trap this exists for: only Input Monitoring missing must
+        // NOT be reported as an Accessibility problem.
+        let one = MenuBarState.noPermission(missing: ["Input Monitoring"]).label
+        #expect(one.contains("Input Monitoring"))
+        #expect(!one.contains("Accessibility"))
+        #expect(one.contains("permission:"))
+
+        let both = MenuBarState.noPermission(missing: ["Input Monitoring", "Accessibility"]).label
+        #expect(both.contains("Input Monitoring"))
+        #expect(both.contains("Accessibility"))
+        #expect(both.contains("permissions:"))
+
+        // Generic fallback when the caller couldn't name the culprit.
+        #expect(!MenuBarState.noPermission(missing: []).label.isEmpty)
     }
 
     @Test func loadingWhenMonitorActiveButModelNotReady() {
@@ -33,7 +60,8 @@ struct MenuBarStateTests {
         #expect(MenuBarState.ready(cleanup: .off).tint == .systemGreen)
         #expect(MenuBarState.ready(cleanup: .unavailable).tint == .systemGreen)
         #expect(MenuBarState.ready(cleanup: .active(model: "m")).tint == .systemBlue)
-        #expect(MenuBarState.noPermission.tint == .systemOrange)
+        #expect(MenuBarState.noPermission(missing: []).tint == .systemOrange)
+        #expect(MenuBarState.noPermission(missing: ["Accessibility"]).tint == .systemOrange)
     }
 
     @Test func recordingUsesTemplateImage() {
@@ -50,7 +78,8 @@ struct MenuBarStateTests {
     @Test func everyStateHasNonEmptyLabel() {
         for state in [MenuBarState.loading, .ready(cleanup: .off),
                       .ready(cleanup: .unavailable), .ready(cleanup: .active(model: "m")),
-                      .recording, .thinking, .noPermission] {
+                      .recording, .thinking, .noPermission(missing: []),
+                      .noPermission(missing: ["Input Monitoring"])] {
             #expect(!state.label.isEmpty)
         }
     }
