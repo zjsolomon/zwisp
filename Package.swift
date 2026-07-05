@@ -2,7 +2,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "Zwhisper",
+    name: "zwisp",
     platforms: [.macOS(.v14)],
     dependencies: [
         .package(url: "https://github.com/argmaxinc/WhisperKit.git", from: "1.0.0")
@@ -11,22 +11,22 @@ let package = Package(
         // Pure domain logic: no external dependencies, so it (and its tests)
         // compile fast and stay unit-testable without pulling in WhisperKit/CoreML.
         .target(
-            name: "ZwhisperCore",
-            path: "Sources/ZwhisperCore"
+            name: "ZwispCore",
+            path: "Sources/ZwispCore"
         ),
         // The app itself: system-framework and WhisperKit glue on top of the core.
         .executableTarget(
-            name: "Zwhisper",
+            name: "zwisp",
             dependencies: [
-                "ZwhisperCore",
+                "ZwispCore",
                 .product(name: "WhisperKit", package: "WhisperKit")
             ],
-            path: "Sources/Zwhisper"
+            path: "Sources/zwisp"
         ),
         .testTarget(
-            name: "ZwhisperCoreTests",
-            dependencies: ["ZwhisperCore"],
-            path: "Tests/ZwhisperCoreTests"
+            name: "ZwispCoreTests",
+            dependencies: ["ZwispCore"],
+            path: "Tests/ZwispCoreTests"
         )
     ]
 )

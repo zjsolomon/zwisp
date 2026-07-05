@@ -7,9 +7,9 @@
 # This will prompt (GUI or sudo) to add a trust setting for the certificate.
 set -euo pipefail
 
-KC="$HOME/Library/Keychains/zwhisper-codesign.keychain-db"
-KCPASS="zwhisper"
-CN="Zwhisper Self-Signed"
+KC="$HOME/Library/Keychains/zwisp-codesign.keychain-db"
+KCPASS="zwisp"
+CN="zwisp Self-Signed"
 
 # Consider it done only if the identity is present AND valid (no trust error
 # annotation like CSSMERR_TP_NOT_TRUSTED on its line).

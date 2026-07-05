@@ -1,5 +1,5 @@
 import Testing
-@testable import ZwhisperCore
+@testable import ZwispCore
 
 struct HotkeyTests {
     @Test func rightCommandMaskMatchesDeviceFlagBit() {

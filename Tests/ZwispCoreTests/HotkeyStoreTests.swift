@@ -1,11 +1,11 @@
 import Testing
 import Foundation
-@testable import ZwhisperCore
+@testable import ZwispCore
 
 struct HotkeyStoreTests {
     /// A fresh, isolated defaults suite so tests never touch real preferences.
     private func freshDefaults() -> UserDefaults {
-        UserDefaults(suiteName: "ZwhisperHotkeyTests-\(UUID().uuidString)")!
+        UserDefaults(suiteName: "zwispHotkeyTests-\(UUID().uuidString)")!
     }
 
     @Test func defaultsToRightCommandOnFirstRun() {

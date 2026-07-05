@@ -63,12 +63,12 @@ public final class CleanupService {
             let (data, response) = try await httpClient.data(for: buildRequest(for: text))
             guard let parsed = Self.parse(data: data, response: response) else { return text }
             guard let cleaned = Self.sanitize(parsed, raw: text) else {
-                NSLog("Zwhisper: cleanup output failed sanity checks; using raw text")
+                NSLog("zwisp: cleanup output failed sanity checks; using raw text")
                 return text
             }
             return cleaned
         } catch {
-            NSLog("Zwhisper: cleanup unavailable (\(error.localizedDescription)); using raw text")
+            NSLog("zwisp: cleanup unavailable (\(error.localizedDescription)); using raw text")
             return text
         }
     }

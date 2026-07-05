@@ -1,30 +1,30 @@
 #!/bin/bash
-# Builds Zwhisper and wraps the binary in a proper .app bundle so macOS can grant
+# Builds zwisp and wraps the binary in a proper .app bundle so macOS can grant
 # Microphone + Accessibility permissions (these are tied to a signed app bundle).
 set -euo pipefail
 cd "$(dirname "$0")"
 
 CONFIG="${1:-release}"
-APP="Zwhisper.app"
+APP="zwisp.app"
 
 echo "==> Building ($CONFIG)…"
 swift build -c "$CONFIG"
 
-BIN=".build/$CONFIG/Zwhisper"
+BIN=".build/$CONFIG/zwisp"
 
 echo "==> Assembling ${APP}…"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$BIN" "$APP/Contents/MacOS/Zwhisper"
+cp "$BIN" "$APP/Contents/MacOS/zwisp"
 cp Info.plist "$APP/Contents/Info.plist"
 cp Assets/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 # Prefer the stable self-signed identity (see setup-signing.sh) so the
 # Accessibility/Microphone grants persist across rebuilds; fall back to ad-hoc.
-IDENTITY="Zwhisper Self-Signed"
-SIGN_KC="$HOME/Library/Keychains/zwhisper-codesign.keychain-db"
+IDENTITY="zwisp Self-Signed"
+SIGN_KC="$HOME/Library/Keychains/zwisp-codesign.keychain-db"
 if security find-identity -v -p codesigning 2>/dev/null | grep -q "$IDENTITY"; then
-    [ -f "$SIGN_KC" ] && security unlock-keychain -p zwhisper "$SIGN_KC" 2>/dev/null || true
+    [ -f "$SIGN_KC" ] && security unlock-keychain -p zwisp "$SIGN_KC" 2>/dev/null || true
     echo "==> Code signing with \"$IDENTITY\" (stable identity)…"
     codesign --force --deep --keychain "$SIGN_KC" --sign "$IDENTITY" "$APP"
 else

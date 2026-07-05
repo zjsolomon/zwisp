@@ -2,7 +2,7 @@ import AppKit
 import ApplicationServices
 import IOKit.hid
 import ServiceManagement
-import ZwhisperCore
+import ZwispCore
 
 /// Orchestrates the whole flow and owns the menu-bar item.
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -225,7 +225,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupMenuBar() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "Zwhisper", action: nil, keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "zwisp", action: nil, keyEquivalent: ""))
         menu.addItem(.separator())
 
         // Hotkeys submenu — rebuilt each time it opens (see menuNeedsUpdate).
@@ -333,7 +333,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// User clicked "Ollama isn't running — click to start". Try, in order:
     /// the Ollama.app bundle (menu-bar app; also registers itself at login),
-    /// the CLI (`ollama serve`, detached so it outlives Zwhisper), and finally
+    /// the CLI (`ollama serve`, detached so it outlives zwisp), and finally
     /// the download page for people who don't have Ollama at all.
     @objc private func startOllama() {
         let appURL = ["com.ollama.ollama", "com.electron.ollama"]
@@ -350,7 +350,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if let cli = ["/opt/homebrew/bin/ollama", "/usr/local/bin/ollama"]
             .first(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
-            // Detach fully so the server isn't tied to Zwhisper's lifetime.
+            // Detach fully so the server isn't tied to zwisp's lifetime.
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/bin/sh")
             process.arguments = ["-c", "nohup \(cli) serve >/dev/null 2>&1 &"]
@@ -386,10 +386,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 sender.state = .on
             }
         } catch {
-            NSLog("Zwhisper: launch-at-login toggle failed: \(error)")
+            NSLog("zwisp: launch-at-login toggle failed: \(error)")
             let alert = NSAlert()
             alert.messageText = "Couldn't change Launch at Login"
-            alert.informativeText = "\(error.localizedDescription)\n\nMake sure Zwhisper is in your Applications folder."
+            alert.informativeText = "\(error.localizedDescription)\n\nMake sure zwisp is in your Applications folder."
             alert.runModal()
         }
     }
@@ -398,7 +398,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let template = (state.tint == nil)
         let image = Self.makeIcon(tint: state.tint ?? .labelColor, template: template)
         statusItem.button?.image = image
-        statusItem.button?.toolTip = "Zwhisper – \(state.label)"
+        statusItem.button?.toolTip = "zwisp – \(state.label)"
     }
 
     /// Draws the menu-bar glyph: a microphone with a bold "Z" in its head.
@@ -534,7 +534,7 @@ extension AppDelegate: NSMenuDelegate {
         let alert = NSAlert()
         alert.messageText = "Grant permissions first"
         alert.informativeText = "Adding a hotkey needs Accessibility and Input Monitoring "
-            + "access so Zwhisper can detect the key. Enable Zwhisper in System Settings → "
+            + "access so zwisp can detect the key. Enable zwisp in System Settings → "
             + "Privacy & Security, then try again."
         alert.addButton(withTitle: "OK")
         alert.runModal()

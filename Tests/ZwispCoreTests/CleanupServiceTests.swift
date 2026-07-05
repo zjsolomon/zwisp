@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import ZwhisperCore
+@testable import ZwispCore
 
 struct CleanupServiceTests {
     /// A fake HTTP client that returns a canned result (or throws) without
@@ -21,7 +21,7 @@ struct CleanupServiceTests {
     /// Builds a service backed by an isolated UserDefaults suite so tests never
     /// touch (or depend on) real preferences.
     private func makeService(_ client: HTTPClient, enabled: Bool = true) -> CleanupService {
-        let defaults = UserDefaults(suiteName: "ZwhisperTests-\(UUID().uuidString)")!
+        let defaults = UserDefaults(suiteName: "zwispTests-\(UUID().uuidString)")!
         let service = CleanupService(config: Configuration.Cleanup(), httpClient: client, defaults: defaults)
         service.enabled = enabled
         return service
@@ -87,7 +87,7 @@ struct CleanupServiceTests {
 
     @Test func buildRequestEncodesModelPromptAndHeaders() throws {
         let config = Configuration.Cleanup(model: "llama3.2:3b", temperature: 0.2)
-        let defaults = UserDefaults(suiteName: "ZwhisperTests-\(UUID().uuidString)")!
+        let defaults = UserDefaults(suiteName: "zwispTests-\(UUID().uuidString)")!
         let service = CleanupService(
             config: config,
             httpClient: FakeClient(result: .failure(URLError(.badURL))),
@@ -115,7 +115,7 @@ struct CleanupServiceTests {
     @Test func responseTokenBudgetScalesWithInputAndClamps() {
         let config = Configuration.Cleanup(
             minResponseTokens: 100, maxResponseTokens: 2_048, responseTokenMultiplier: 2)
-        let defaults = UserDefaults(suiteName: "ZwhisperTests-\(UUID().uuidString)")!
+        let defaults = UserDefaults(suiteName: "zwispTests-\(UUID().uuidString)")!
         let service = CleanupService(
             config: config, httpClient: FakeClient(result: .failure(URLError(.badURL))),
             defaults: defaults)
@@ -128,7 +128,7 @@ struct CleanupServiceTests {
     // MARK: - model selection
 
     @Test func modelDefaultsToConfigAndPersistsUserChoice() {
-        let defaults = UserDefaults(suiteName: "ZwhisperTests-\(UUID().uuidString)")!
+        let defaults = UserDefaults(suiteName: "zwispTests-\(UUID().uuidString)")!
         let config = Configuration.Cleanup(model: "llama3.2:3b")
         let client = FakeClient(result: .failure(URLError(.badURL)))
 
@@ -243,8 +243,8 @@ struct CleanupServiceTests {
 
     @Test func retainedWordFractionIgnoresCaseAndPunctuation() {
         let fraction = CleanupService.retainedWordFraction(
-            raw: "lets ship the zwhisper build on friday",
-            cleaned: "Let's ship the Zwhisper build on Friday!")
+            raw: "lets ship the zwisp build on friday",
+            cleaned: "Let's ship the zwisp build on Friday!")
         #expect(fraction == 1.0)
     }
 

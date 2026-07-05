@@ -1,5 +1,5 @@
 .build/
-Zwhisper.app/
+zwisp.app/
 *.xcodeproj
 .DS_Store
 # Package.resolved is intentionally committed: this is an app, so pinning exact

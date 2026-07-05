@@ -1,14 +1,14 @@
 import Foundation
 
 /// Minimal append-to-file logger. Unified-log (NSLog) output is unreliable to
-/// retrieve for an ad-hoc app, so we also write to ~/Library/Logs/Zwhisper.log.
+/// retrieve for an ad-hoc app, so we also write to ~/Library/Logs/zwisp.log.
 public enum Log {
     private static let url: URL = FileManager.default
         .homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/Logs/Zwhisper.log")
+        .appendingPathComponent("Library/Logs/zwisp.log")
 
     public static func write(_ message: String) {
-        NSLog("Zwhisper: \(message)")
+        NSLog("zwisp: \(message)")
         let line = "\(Date()) \(message)\n"
         let data = Data(line.utf8)
         if FileManager.default.fileExists(atPath: url.path),
