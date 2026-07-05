@@ -73,6 +73,9 @@ covered by CI. The app layer should stay a thin glue layer.
   conservation rule: a cleanup that drops too many of the speaker's words is discarded). Keep both
   fallbacks intact — dictation must always work. The cleanup model is user-selectable from the menu
   (`availableModels()` lists what Ollama has); the pick is persisted and overrides the config default.
+  `CleanupService.status()` (off/unavailable/active) drives the menu-bar colour via `MenuBarState`
+  (red = model loading, green = ready raw-only, blue = ready + cleanup); `AppDelegate` re-checks it
+  on toggle/model change, after each dictation, and on a 30 s poll.
 - WhisperKit downloads the model from Hugging Face on first use (internet once), then runs
   offline. Transcription is **batch on release**, not live streaming.
 - Signing: `build-app.sh` prefers a stable self-signed identity (`setup-signing.sh`) so grants
