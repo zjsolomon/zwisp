@@ -503,7 +503,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         dictionaryMenu.addItem(.separator())
         let hint = NSMenuItem(
-            title: "Add: select text in any app → right-click → Services → Add to zwisp Dictionary",
+            title: "Add: select a word in any app, press ⌃⌥⇧⌘Z (or right-click → Services)",
             action: nil, keyEquivalent: "")
         hint.isEnabled = false
         dictionaryMenu.addItem(hint)

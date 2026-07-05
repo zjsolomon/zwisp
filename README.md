@@ -146,10 +146,18 @@ Whisper spells names it has never seen however it pleases. When a dictation
 comes out with "zeed" instead of "Zied":
 
 - **Add a word** — select the *correct* spelling anywhere (a document, a chat,
-  a browser), right-click it → **Services** → **Add to zwisp Dictionary**.
-  (macOS sometimes tucks the item inside the Services submenu; if it doesn't
-  appear at all right after installing, log out and back in — macOS caches the
-  Services registry.)
+  a browser) and press **⌃⌥⇧⌘Z** (all four modifiers — the only chord macOS
+  and mainstream apps leave alone; Sequoia's window tiling owns most ⌃⌥⌘
+  combos), or right-click it → **Services** → **Add to zwisp Dictionary**.
+  (macOS puts Services in that submenu — third-party apps can't add top-level
+  items to other apps' right-click menus, so the shortcut is the fast path.)
+  `install.sh` sets the shortcut up; change it any time in System Settings →
+  Keyboard → Keyboard Shortcuts → Services → Text.
+- **If the item doesn't appear** right after installing: macOS caches the
+  Services registry. Check System Settings → Keyboard → Keyboard Shortcuts →
+  Services → Text and make sure **Add to zwisp Dictionary** is listed and
+  ticked, run `/System/Library/CoreServices/pbs -flush`, and re-open the app
+  you're right-clicking in (log out and back in as a last resort).
 - **Review / remove** — menu-bar icon → **Dictionary** lists your words; click
   one to remove it.
 

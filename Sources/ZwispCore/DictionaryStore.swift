@@ -16,11 +16,21 @@ public final class DictionaryStore {
     private let defaults: UserDefaults
     static let key = "personalDictionary"
 
+    /// First-run seed: the app's own name — it's lowercase, Whisper has never
+    /// seen it, and it's the word every user dictates when talking about the
+    /// app. Doubles as a visible example of what the dictionary is for.
+    public static let defaultEntries = ["zwisp"]
+
     public init(config: Configuration.PersonalDictionary = Configuration.PersonalDictionary(),
                 defaults: UserDefaults = .standard) {
         self.config = config
         self.defaults = defaults
-        self.entries = defaults.stringArray(forKey: Self.key) ?? []
+        if let stored = defaults.stringArray(forKey: Self.key) {
+            // Key present (possibly an empty list the user cleared on purpose).
+            self.entries = stored
+        } else {
+            self.entries = Self.defaultEntries
+        }
     }
 
     public var isEmpty: Bool { entries.isEmpty }
