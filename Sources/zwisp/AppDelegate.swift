@@ -34,6 +34,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var styleRewarmWork: DispatchWorkItem?
     private let probe = PermissionProbe()
 
+    /// User preference for the on-screen dictation wave (absent → on).
+    private lazy var overlayStore = OverlayStore()
+    /// The dictation-wave overlay. Reads the live mic level straight off the
+    /// recorder; the panel is built lazily on first show, so a disabled overlay
+    /// costs nothing.
+    private lazy var overlay = DictationOverlay(
+        config: config.overlay,
+        levelProvider: { [weak self] in self?.recorder.currentLevel() ?? 0 })
+
     /// Owns the WhisperKit model download (visible progress) + hands
     /// `Transcriber` a ready folder. `onPhaseChange` repaints the setup window
     /// and re-derives the menu-bar icon (`.loading` while the model isn't ready).
@@ -103,6 +112,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         dictionaryStore: dictionaryStore,
         styleRuleStore: styleRuleStore,
         cleanup: cleanup,
+        overlayStore: overlayStore,
         config: config,
         actions: SettingsWindow.Actions(
             addHotkey: { [weak self] in self?.presentAddHotkey() },
@@ -336,6 +346,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             worker.start()
             streamingWorker = worker
         }
+        // Show the wave now the mic is actually open (past the permission
+        // guards): no pill for a denied mic, and this also flips a still-visible
+        // thinking pill back to recording on a fast re-press.
+        if overlayStore.enabled { overlay.showRecording() }
         refreshState()
     }
 
@@ -351,6 +365,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard samples.count > config.audio.minimumSampleCount else {   // stray tap
             worker?.cancel()
             Log.write("too short; skipping")
+            overlay.hide()   // no job to drain the pill, so hide it here
             refreshState()
             return
         }
@@ -367,6 +382,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                            windowTitle: context.windowTitle)
         jobsInFlight += 1
         refreshState()
+        overlay.beginThinking()   // recording done; pulse while the pipeline runs
 
         // Chain onto the previous job: strictly serial, strictly in order.
         let previous = pipelineTail
@@ -431,6 +447,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func finishJob(injecting text: String, targetPID: pid_t?) async {
         defer {
             jobsInFlight -= 1
+            // Drain hook: hide the wave only once the LAST queued job finishes
+            // (several may still be pulsing), and only if we're not recording —
+            // a re-pressed hotkey's `showRecording()` now owns the panel, so we
+            // must not yank it out from under a fresh take.
+            if jobsInFlight == 0 && !isRecording { overlay.hide() }
             refreshState()
             // The dictation just exercised Ollama; sync the blue/green icon.
             refreshCleanupStatus()

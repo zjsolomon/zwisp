@@ -1,3 +1,4 @@
+import Accelerate
 import AVFoundation
 import ZwispCore
 
@@ -7,9 +8,13 @@ final class AudioRecorder {
     private let engine = AVAudioEngine()
     private var converter: AVAudioConverter?
     private var samples: [Float] = []
+    // Most recent per-buffer mean-square (RMS²) of captured audio, written on the
+    // realtime audio thread and read at animation rate on main via `currentLevel()`.
+    private var latestPower: Float = 0
     private var isRunning = false
-    // Guards `samples`, which is written on the realtime audio thread and read
-    // from the main thread in stop().
+    // Guards `samples` and `latestPower`, both written on the realtime audio
+    // thread and read from the main thread (in stop()/snapshot() and
+    // currentLevel() respectively).
     private let lock = NSLock()
 
     private let targetFormat: AVAudioFormat
@@ -27,6 +32,7 @@ final class AudioRecorder {
         guard !isRunning else { return }
         lock.lock()
         samples.removeAll(keepingCapacity: true)
+        latestPower = 0
         lock.unlock()
 
         let input = engine.inputNode
@@ -68,8 +74,18 @@ final class AudioRecorder {
         isRunning = false
         lock.lock()
         let result = samples
+        latestPower = 0
         lock.unlock()
         return result
+    }
+
+    /// The current microphone level as an RMS amplitude (√ of the latest
+    /// per-buffer mean-square). O(1) — reads a single cached Float under the
+    /// lock; called by the dictation overlay at ~30 Hz on the main thread.
+    func currentLevel() -> Float {
+        lock.lock()
+        defer { lock.unlock() }
+        return latestPower.squareRoot()
     }
 
     private func append(_ buffer: AVAudioPCMBuffer) {
@@ -98,8 +114,16 @@ final class AudioRecorder {
 
         if let channel = out.floatChannelData {
             let count = Int(out.frameLength)
+            // Compute this buffer's mean-square (RMS²) on the stack, before
+            // taking the lock, so the realtime path does no work inside the
+            // critical section beyond the existing append plus one Float store.
+            var meanSquare: Float = 0
+            if count > 0 {
+                vDSP_measqv(channel[0], 1, &meanSquare, vDSP_Length(count))
+            }
             lock.lock()
             samples.append(contentsOf: UnsafeBufferPointer(start: channel[0], count: count))
+            latestPower = meanSquare
             lock.unlock()
         }
     }

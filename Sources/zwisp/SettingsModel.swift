@@ -19,6 +19,7 @@ final class SettingsModel {
     private let dictionaryStore: DictionaryStore
     private let styleRuleStore: StyleRuleStore
     private let cleanup: CleanupService
+    private let overlayStore: OverlayStore
     let config: Configuration
     private let actions: SettingsWindow.Actions
 
@@ -32,6 +33,7 @@ final class SettingsModel {
     private(set) var cleanupModel: String = ""
     private(set) var whisperModel: String = ""
     private(set) var launchAtLogin: Bool = false
+    private(set) var overlayEnabled: Bool = false
 
     // MARK: - Async-loaded
 
@@ -43,11 +45,13 @@ final class SettingsModel {
 
     init(hotkeyStore: HotkeyStore, dictionaryStore: DictionaryStore,
          styleRuleStore: StyleRuleStore, cleanup: CleanupService,
-         config: Configuration, actions: SettingsWindow.Actions) {
+         overlayStore: OverlayStore, config: Configuration,
+         actions: SettingsWindow.Actions) {
         self.hotkeyStore = hotkeyStore
         self.dictionaryStore = dictionaryStore
         self.styleRuleStore = styleRuleStore
         self.cleanup = cleanup
+        self.overlayStore = overlayStore
         self.config = config
         self.actions = actions
         snapshot()
@@ -71,6 +75,7 @@ final class SettingsModel {
         cleanupModel = cleanup.model
         whisperModel = config.whisperModel
         launchAtLogin = (SMAppService.mainApp.status == .enabled)
+        overlayEnabled = overlayStore.enabled
     }
 
     private func reloadCleanupStatus() {
@@ -187,6 +192,15 @@ final class SettingsModel {
     /// stores the new state it returns.
     func toggleLaunchAtLogin() {
         launchAtLogin = actions.toggleLaunchAtLogin()
+    }
+
+    // MARK: - Dictation wave
+
+    /// Persists the overlay preference. No `Actions` closure: there's no
+    /// downstream side effect — the next dictation simply reads the store.
+    func setOverlayEnabled(_ enabled: Bool) {
+        overlayStore.enabled = enabled
+        snapshot()
     }
 
     // MARK: - Setup guide

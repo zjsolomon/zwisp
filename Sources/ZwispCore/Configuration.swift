@@ -10,6 +10,7 @@ public struct Configuration {
     public var streaming: Streaming
     public var dictionary: PersonalDictionary
     public var setup: Setup
+    public var overlay: Overlay
 
     public init(
         whisperModel: String,
@@ -18,7 +19,8 @@ public struct Configuration {
         injection: Injection = Injection(),
         streaming: Streaming = Streaming(),
         dictionary: PersonalDictionary = PersonalDictionary(),
-        setup: Setup = Setup()
+        setup: Setup = Setup(),
+        overlay: Overlay = Overlay()
     ) {
         self.whisperModel = whisperModel
         self.audio = audio
@@ -27,6 +29,7 @@ public struct Configuration {
         self.streaming = streaming
         self.dictionary = dictionary
         self.setup = setup
+        self.overlay = overlay
     }
 
     /// Microphone capture / WhisperKit input format.
@@ -282,6 +285,107 @@ public struct Configuration {
             self.confirmationMarginSeconds = confirmationMarginSeconds
             self.minNewAudioSeconds = minNewAudioSeconds
             self.pollInterval = pollInterval
+        }
+    }
+
+    /// The on-screen dictation wave overlay: a small translucent pill,
+    /// bottom-centre of the screen being dictated into, a quantized 8-bit LED
+    /// equalizer whose columns of lit cells track the live voice level while the
+    /// hotkey is held. All wave geometry is
+    /// derived deterministically (`WaveLevelMeter`) from these knobs so it is
+    /// unit-tested without a screen. Dimensions are plain `Double`/`Int` (points
+    /// / decibels / seconds) so `ZwispCore` stays Foundation-only — the app
+    /// layer converts to `CGFloat` where AppKit needs it.
+    public struct Overlay {
+        /// Compile-time kill switch. `false` disables the overlay entirely (the
+        /// panel is never built). The user's *persisted* preference is a
+        /// separate concern owned by `OverlayStore`; this only gates whether the
+        /// feature exists at all.
+        public var enabled: Bool
+        /// Number of columns (LED bands) in the pill.
+        public var barCount: Int
+        /// Number of LED cells stacked in each column.
+        public var rowCount: Int
+        /// Vertical gap between stacked cells in a column, in points.
+        public var rowGap: Double
+        /// Redraw cadence for the animation timer (seconds between ticks).
+        public var pollInterval: TimeInterval
+        /// Time constant used while the level is *rising* — short, so the bars
+        /// jump to a loud syllable almost immediately.
+        public var attackSeconds: TimeInterval
+        /// Time constant used while the level is *falling* — longer than attack,
+        /// so bars ease down instead of flickering between words. The
+        /// attack/release asymmetry is what reads as "smooth but responsive".
+        public var releaseSeconds: TimeInterval
+        /// Bottom of the perceptual dB window: RMS at or below this maps to 0.
+        public var noiseFloorDb: Double
+        /// Top of the perceptual dB window: RMS at or above this maps to 1.
+        public var ceilingDb: Double
+        /// How much shorter the outer columns are than the centre one: a column
+        /// `d` (0…1) of the way to the edge is scaled by `1 − sideFalloff·d`.
+        /// Kept small — an equalizer grid reads nearly flat, with only a whisper
+        /// of centre weighting.
+        public var sideFalloff: Double
+        /// Amplitude of the per-column wobble (as a fraction), scaled by the live
+        /// level so a silent pill is perfectly still.
+        public var wobbleAmount: Double
+        /// Wobble frequency in Hz (cycles per second of animation phase).
+        public var wobbleHz: Double
+        /// Pill width in points.
+        public var pillWidth: Double
+        /// Pill height in points.
+        public var pillHeight: Double
+        /// Cell (and column) width in points.
+        public var barWidth: Double
+        /// Horizontal gap between columns in points.
+        public var barSpacing: Double
+        /// Gap between the pill and the bottom of the screen's visible frame.
+        public var bottomOffset: Double
+        /// Fade-in duration when the pill appears.
+        public var fadeInSeconds: TimeInterval
+        /// Fade-out duration when the pill leaves.
+        public var fadeOutSeconds: TimeInterval
+
+        public init(
+            enabled: Bool = true,
+            barCount: Int = 9,
+            rowCount: Int = 5,
+            rowGap: Double = 1.4,
+            pollInterval: TimeInterval = 1.0 / 30.0,
+            attackSeconds: TimeInterval = 0.05,
+            releaseSeconds: TimeInterval = 0.35,
+            noiseFloorDb: Double = -50,
+            ceilingDb: Double = -18,
+            sideFalloff: Double = 0.15,
+            wobbleAmount: Double = 0.30,
+            wobbleHz: Double = 2.2,
+            pillWidth: Double = 96,
+            pillHeight: Double = 32,
+            barWidth: Double = 4,
+            barSpacing: Double = 4,
+            bottomOffset: Double = 64,
+            fadeInSeconds: TimeInterval = 0.15,
+            fadeOutSeconds: TimeInterval = 0.18
+        ) {
+            self.enabled = enabled
+            self.barCount = barCount
+            self.rowCount = rowCount
+            self.rowGap = rowGap
+            self.pollInterval = pollInterval
+            self.attackSeconds = attackSeconds
+            self.releaseSeconds = releaseSeconds
+            self.noiseFloorDb = noiseFloorDb
+            self.ceilingDb = ceilingDb
+            self.sideFalloff = sideFalloff
+            self.wobbleAmount = wobbleAmount
+            self.wobbleHz = wobbleHz
+            self.pillWidth = pillWidth
+            self.pillHeight = pillHeight
+            self.barWidth = barWidth
+            self.barSpacing = barSpacing
+            self.bottomOffset = bottomOffset
+            self.fadeInSeconds = fadeInSeconds
+            self.fadeOutSeconds = fadeOutSeconds
         }
     }
 

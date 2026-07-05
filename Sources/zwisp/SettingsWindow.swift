@@ -34,11 +34,11 @@ final class SettingsWindow {
 
     init(hotkeyStore: HotkeyStore, dictionaryStore: DictionaryStore,
          styleRuleStore: StyleRuleStore, cleanup: CleanupService,
-         config: Configuration, actions: Actions) {
+         overlayStore: OverlayStore, config: Configuration, actions: Actions) {
         self.model = SettingsModel(
             hotkeyStore: hotkeyStore, dictionaryStore: dictionaryStore,
             styleRuleStore: styleRuleStore, cleanup: cleanup,
-            config: config, actions: actions)
+            overlayStore: overlayStore, config: config, actions: actions)
     }
 
     deinit {

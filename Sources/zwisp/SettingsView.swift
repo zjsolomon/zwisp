@@ -55,6 +55,9 @@ private struct GeneralTab: View {
                 Toggle("Launch at Login", isOn: Binding(
                     get: { model.launchAtLogin },
                     set: { _ in model.toggleLaunchAtLogin() }))
+                Toggle("Show wave while dictating", isOn: Binding(
+                    get: { model.overlayEnabled },
+                    set: { model.setOverlayEnabled($0) }))
                 Button("Setup Guide…") { model.openSetupGuide() }
             }
         }
