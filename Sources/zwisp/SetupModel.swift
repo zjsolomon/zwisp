@@ -2,7 +2,7 @@ import Observation
 import ZwispCore
 
 /// View model backing `SetupView`. Holds the injected probe/stores/installers
-/// plus the `SetupWindow.Actions` closures, and exposes plain snapshot
+/// plus the `MainWindow.Actions` closures, and exposes plain snapshot
 /// properties the SwiftUI views read. Mirrors `SettingsModel`: the model reads
 /// state and forwards intents to the `Actions` closures (the app layer owns the
 /// side effects — permission requests, download kick-offs, hotkey-monitor
@@ -19,7 +19,7 @@ final class SetupModel {
     private let ollamaInstaller: OllamaInstaller
     private let cleanup: CleanupService
     let config: Configuration
-    private let actions: SetupWindow.Actions
+    private let actions: MainWindow.Actions
 
     // MARK: - Snapshots (re-read on `refresh()`)
 
@@ -41,7 +41,7 @@ final class SetupModel {
 
     init(probe: PermissionProbe, hotkeyStore: HotkeyStore,
          speechInstaller: SpeechModelInstaller, ollamaInstaller: OllamaInstaller,
-         cleanup: CleanupService, config: Configuration, actions: SetupWindow.Actions) {
+         cleanup: CleanupService, config: Configuration, actions: MainWindow.Actions) {
         self.probe = probe
         self.hotkeyStore = hotkeyStore
         self.speechInstaller = speechInstaller
@@ -90,7 +90,7 @@ final class SetupModel {
     // MARK: - Refresh
 
     /// Full re-snapshot: permissions, all three install phases, model name and
-    /// ready message. Safe to call at any time (e.g. from `SetupWindow.refresh()`
+    /// ready message. Safe to call at any time (e.g. from `MainWindow.refresh()`
     /// via an installer's `onPhaseChange`).
     func refresh() {
         permissions = probe.state()

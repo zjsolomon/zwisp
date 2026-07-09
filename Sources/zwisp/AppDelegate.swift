@@ -50,7 +50,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var speechInstaller: SpeechModelInstaller = {
         let installer = SpeechModelInstaller(variant: config.whisperModel, setup: config.setup)
         installer.onPhaseChange = { [weak self] in
-            self?.setup.refresh()
+            self?.mainWindow.refresh()
             self?.refreshState()
         }
         return installer
@@ -63,7 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var ollamaInstaller: OllamaInstaller = {
         let installer = OllamaInstaller(cleanup: cleanup, setup: config.setup)
         installer.onPhaseChange = { [weak self] in
-            self?.setup.refresh()
+            self?.mainWindow.refresh()
             self?.refreshState()
         }
         installer.onCleanupModelReady = { [weak self] in
@@ -72,16 +72,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return installer
     }()
 
-    /// The guided first-run setup window (SwiftUI in an `NSHostingController`):
-    /// the three permissions plus the speech-model download and the optional
-    /// Ollama-cleanup chain. Replaces the old `OnboardingWindow`; wired to the
-    /// same probe/stores/installers via the frozen `Actions` API.
+    /// Local dictation stats for the Home dashboard — counts and durations
+    /// only, never transcript text. Recorded post-inject in `finishJob`.
+    private lazy var statsStore = StatsStore(config: config.stats)
+    /// Phase bridge to the Home equalizer, mutated beside the overlay's
+    /// show/think/hide seams (but never gated on `overlayStore.enabled` —
+    /// that preference governs only the floating pill).
+    private let waveFeed = WaveFeed()
+
+    /// The unified main window (SwiftUI in an `NSHostingController`): sidebar
+    /// navigation over Home, the guided Setup checklist, and every settings
+    /// surface. Replaces the separate `SetupWindow`/`SettingsWindow` pair; the
+    /// app layer drives it through the one frozen `Actions` API so the menu
+    /// bar and the window share a single code path for every side effect.
     @MainActor
-    private lazy var setup = SetupWindow(
+    private lazy var mainWindow = MainWindow(
         probe: probe, hotkeyStore: hotkeyStore,
+        dictionaryStore: dictionaryStore, styleRuleStore: styleRuleStore,
         speechInstaller: speechInstaller, ollamaInstaller: ollamaInstaller,
-        cleanup: cleanup, config: config,
-        actions: SetupWindow.Actions(
+        cleanup: cleanup, overlayStore: overlayStore,
+        statsStore: statsStore, waveFeed: waveFeed,
+        levelProvider: { [weak self] in self?.recorder.currentLevel() ?? 0 },
+        config: config,
+        actions: MainWindow.Actions(
             permissionTapped: { [weak self] permission in
                 self?.handlePermissionTapped(permission)
             },
@@ -94,35 +107,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             retrySpeechDownload: { [weak self] in self?.startSpeechModelSetup() },
             runCleanupSetup: { [weak self] in self?.ollamaInstaller.runSetupChain() },
-            startOllamaOnly: { [weak self] in self?.startOllama() }
-        ))
-    private let capturePanel = HotkeyCapturePanel()
-    private let hotkeysMenu = NSMenu(title: "Hotkeys")
-    private let cleanupMenu = NSMenu(title: "AI Cleanup")
-    private let dictionaryMenu = NSMenu(title: "Dictionary")
-
-    /// The unified Settings window (SwiftUI in an `NSHostingController`). Built
-    /// lazily on first use and wired to the same store/cleanup instances the
-    /// menu uses, via the frozen `Actions` API, so both surfaces stay in sync.
-    /// `@MainActor` because `SettingsWindow` is main-actor-isolated (as all its
-    /// AppKit/SwiftUI internals must be).
-    @MainActor
-    private lazy var settings = SettingsWindow(
-        hotkeyStore: hotkeyStore,
-        dictionaryStore: dictionaryStore,
-        styleRuleStore: styleRuleStore,
-        cleanup: cleanup,
-        overlayStore: overlayStore,
-        config: config,
-        actions: SettingsWindow.Actions(
+            startOllamaOnly: { [weak self] in self?.startOllama() },
             addHotkey: { [weak self] in self?.presentAddHotkey() },
             removeHotkey: { [weak self] hotkey in self?.removeHotkey(hotkey) },
             cleanupSettingChanged: { [weak self] in self?.refreshCleanupStatus() },
             dictionaryChanged: { [weak self] in self?.rewarmCleanup() },
             stylesChanged: { [weak self] in self?.scheduleStyleRewarmIfNeeded() },
-            toggleLaunchAtLogin: { [weak self] in self?.setLaunchAtLogin() ?? false },
-            openSetupGuide: { [weak self] in self?.setup.present() }
+            toggleLaunchAtLogin: { [weak self] in self?.setLaunchAtLogin() ?? false }
         ))
+    private let capturePanel = HotkeyCapturePanel()
 
     // Independent readiness signals; the menu-bar state is derived from them.
     private var monitorActive = false
@@ -143,7 +136,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// on WhisperKit and results are typed in dictation order.
     private var pipelineTail: Task<Void, Never>?
     private var retryTimer: Timer?
-    private var cleanupMenuGeneration = 0 // invalidates in-flight model fetches
+    // The menu's two stateful items, re-synced by `menuWillOpen` so a change
+    // made from the window shows checked/unchecked correctly here.
+    private var cleanupToggleItem: NSMenuItem!
+    private var loginItem: NSMenuItem!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Log.write("=== launched; modelName=\(config.whisperModel) ===")
@@ -175,7 +171,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // speech model missing also forces it (the app is inert without it);
         // Ollama/cleanup missing alone never does — it's optional-by-design.
         if permissions.needsSetup || speechInstaller.installedFolder() == nil {
-            setup.present()
+            mainWindow.present(section: .setup)
         }
         refreshCleanupStatus()
         // Track Ollama coming and going while we're idle (cheap localhost
@@ -323,7 +319,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         case .denied:
             Log.write("microphone access denied; showing setup guide")
-            setup.present()
+            mainWindow.present(section: .setup)
             return
         case .granted:
             break
@@ -576,171 +572,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Menu bar
 
+    /// The menu is deliberately small: the window owns management and one-time
+    /// setup, so only mid-flow actions stay here — toggling cleanup for the
+    /// next dictation, and capturing a word you just saw misheard. The two
+    /// stateful items are refreshed by `menuWillOpen` (which replaced the old
+    /// three-submenu rebuild machinery).
     private func setupMenuBar() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "zwisp", action: nil, keyEquivalent: ""))
         menu.addItem(.separator())
 
-        // The unified Settings window — everything the submenus expose, in one
-        // place. ⌘, matches the platform convention.
-        let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings),
-                                      keyEquivalent: ",")
-        menu.addItem(settingsItem)
+        // The unified main window — everything else lives there. ⌘, keeps the
+        // platform's "app settings" muscle memory pointed at it.
+        menu.addItem(NSMenuItem(title: "Open zwisp…", action: #selector(openMainWindow),
+                                keyEquivalent: ","))
         menu.addItem(.separator())
 
-        // Hotkeys submenu — rebuilt each time it opens (see menuNeedsUpdate).
-        hotkeysMenu.delegate = self
-        let hotkeysItem = NSMenuItem(title: "Hotkeys", action: nil, keyEquivalent: "")
-        hotkeysItem.submenu = hotkeysMenu
-        menu.addItem(hotkeysItem)
-        menu.addItem(.separator())
+        cleanupToggleItem = NSMenuItem(title: "Clean Up Transcripts",
+                                       action: #selector(toggleCleanup), keyEquivalent: "")
+        cleanupToggleItem.state = cleanup.enabled ? .on : .off
+        menu.addItem(cleanupToggleItem)
+        menu.addItem(NSMenuItem(title: "Add Dictionary Word…",
+                                action: #selector(addDictionaryWordClicked), keyEquivalent: ""))
 
-        menu.addItem(NSMenuItem(title: "Open Accessibility Settings…",
-                                action: #selector(openAccessibility), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "Open Input Monitoring Settings…",
-                                action: #selector(openInputMonitoring), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "Open Microphone Settings…",
-                                action: #selector(openMicrophone), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "Setup Guide…",
-                                action: #selector(showOnboarding), keyEquivalent: ""))
-        menu.addItem(.separator())
-
-        // AI Cleanup submenu — rebuilt each time it opens (see menuNeedsUpdate).
-        cleanupMenu.delegate = self
-        let cleanupItem = NSMenuItem(title: "AI Cleanup (Ollama)", action: nil, keyEquivalent: "")
-        cleanupItem.submenu = cleanupMenu
-        menu.addItem(cleanupItem)
-
-        // Dictionary submenu — rebuilt each time it opens (see menuNeedsUpdate).
-        dictionaryMenu.delegate = self
-        let dictionaryItem = NSMenuItem(title: "Dictionary", action: nil, keyEquivalent: "")
-        dictionaryItem.submenu = dictionaryMenu
-        menu.addItem(dictionaryItem)
-
-        let loginItem = NSMenuItem(title: "Launch at Login",
-                                   action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
+        loginItem = NSMenuItem(title: "Launch at Login",
+                               action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
         loginItem.state = (SMAppService.mainApp.status == .enabled) ? .on : .off
         menu.addItem(loginItem)
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)),
                                 keyEquivalent: "q"))
+        menu.delegate = self
         statusItem.menu = menu
-    }
-
-    /// Populates the AI Cleanup submenu: the on/off toggle immediately, then the
-    /// installed-model list once Ollama answers (the menu updates in place).
-    private func rebuildCleanupMenu() {
-        cleanupMenu.removeAllItems()
-
-        let toggle = NSMenuItem(title: "Clean Up Transcripts",
-                                action: #selector(toggleCleanup), keyEquivalent: "")
-        toggle.target = self
-        toggle.state = cleanup.enabled ? .on : .off
-        cleanupMenu.addItem(toggle)
-        cleanupMenu.addItem(.separator())
-
-        let header = NSMenuItem(title: "Model (via Ollama):", action: nil, keyEquivalent: "")
-        header.isEnabled = false
-        cleanupMenu.addItem(header)
-        let placeholder = NSMenuItem(title: "Checking Ollama…", action: nil, keyEquivalent: "")
-        placeholder.isEnabled = false
-        cleanupMenu.addItem(placeholder)
-
-        // Generation token instead of capturing the placeholder item: NSMenuItem
-        // isn't Sendable, and a stale fetch must not touch a rebuilt menu.
-        cleanupMenuGeneration += 1
-        let generation = cleanupMenuGeneration
-        Task { [weak self] in
-            guard let self else { return }
-            let models = await self.cleanup.availableModels()
-            await MainActor.run { self.showCleanupModels(models, ifCurrent: generation) }
-        }
-    }
-
-    /// Swaps the "Checking Ollama…" placeholder (the menu's last item) for the
-    /// model list (current pick checked) or a "not running" notice. No-op if the
-    /// menu was rebuilt since the fetch started.
-    private func showCleanupModels(_ models: [String]?, ifCurrent generation: Int) {
-        guard generation == cleanupMenuGeneration, cleanupMenu.numberOfItems > 0 else { return }
-        let index = cleanupMenu.numberOfItems - 1
-        cleanupMenu.removeItem(at: index)
-
-        guard let models, !models.isEmpty else {
-            if models == nil {
-                // Server not reachable. If Ollama IS installed, offer to start
-                // it right from the menu; if it isn't installed at all, send the
-                // user to the setup window's guided install-Ollama chain.
-                if ollamaInstaller.installedAppURL() != nil {
-                    let item = NSMenuItem(title: "Ollama isn't running — click to start",
-                                          action: #selector(startOllama), keyEquivalent: "")
-                    item.target = self
-                    cleanupMenu.insertItem(item, at: index)
-                } else {
-                    let item = NSMenuItem(title: "Set up AI cleanup…",
-                                          action: #selector(showOnboarding), keyEquivalent: "")
-                    item.target = self
-                    cleanupMenu.insertItem(item, at: index)
-                }
-            } else {
-                // Server is up but the model isn't pulled — the setup window's
-                // cleanup chain pulls the recommended one with progress.
-                let item = NSMenuItem(title: "Set up cleanup model…",
-                                      action: #selector(showOnboarding), keyEquivalent: "")
-                item.target = self
-                cleanupMenu.insertItem(item, at: index)
-            }
-            return
-        }
-
-        // If the saved model was removed from Ollama, still list it (unchecked
-        // models can be picked; the saved one keeps working as a name).
-        var names = models
-        if !names.contains(cleanup.model) { names.append(cleanup.model) }
-        for (offset, name) in names.enumerated() {
-            let item = NSMenuItem(title: name, action: #selector(selectCleanupModel(_:)),
-                                  keyEquivalent: "")
-            item.target = self
-            item.state = (name == cleanup.model) ? .on : .off
-            cleanupMenu.insertItem(item, at: index + offset)
-        }
-    }
-
-    @objc private func selectCleanupModel(_ sender: NSMenuItem) {
-        cleanup.model = sender.title
-        Log.write("cleanup model set to \(sender.title)")
-        refreshCleanupStatus()
-    }
-
-    /// Populates the Dictionary submenu: the stored words (click to remove)
-    /// plus a hint about the Services-based add path.
-    private func rebuildDictionaryMenu() {
-        dictionaryMenu.removeAllItems()
-
-        if dictionaryStore.isEmpty {
-            let empty = NSMenuItem(title: "No words yet", action: nil, keyEquivalent: "")
-            empty.isEnabled = false
-            dictionaryMenu.addItem(empty)
-        } else {
-            let header = NSMenuItem(title: "Words zwisp spells your way (click to remove):",
-                                    action: nil, keyEquivalent: "")
-            header.isEnabled = false
-            dictionaryMenu.addItem(header)
-            for entry in dictionaryStore.sortedEntries {
-                let item = NSMenuItem(title: entry,
-                                      action: #selector(removeDictionaryEntry(_:)),
-                                      keyEquivalent: "")
-                item.target = self
-                item.state = .on
-                dictionaryMenu.addItem(item)
-            }
-        }
-
-        dictionaryMenu.addItem(.separator())
-        let add = NSMenuItem(title: "Add Word…", action: #selector(addDictionaryWordClicked),
-                             keyEquivalent: "")
-        add.target = self
-        dictionaryMenu.addItem(add)
     }
 
     /// A minimal modal prompt for a new dictionary entry. (A system-wide
@@ -775,12 +639,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 + "\(config.dictionary.maxEntryLength) characters."
             oops.runModal()
         }
-    }
-
-    @objc private func removeDictionaryEntry(_ sender: NSMenuItem) {
-        dictionaryStore.remove(sender.title)
-        Log.write("dictionary: removed '\(sender.title)'")
-        rewarmCleanup()
     }
 
     /// The personal dictionary *and* the writing-style block are both part of
@@ -896,76 +754,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return image
     }
 
-    // The deep links alone don't put zwisp in the Settings lists — the request
-    // calls do (and are silent no-ops once the status is decided). Fire both,
-    // so the pane the user lands on actually has a zwisp row to enable.
+    @MainActor @objc private func openMainWindow() { mainWindow.present() }
+}
 
-    @objc private func openAccessibility() {
-        probe.promptAccessibility()
-        probe.openAccessibilitySettings()
+// MARK: - Menu state
+
+extension AppDelegate: NSMenuDelegate {
+    /// Re-syncs the menu's two stateful items just before it opens, so a
+    /// toggle flipped from the window (or by SMAppService itself) reads
+    /// correctly here. Replaces the old per-submenu rebuild machinery.
+    func menuWillOpen(_ menu: NSMenu) {
+        cleanupToggleItem?.state = cleanup.enabled ? .on : .off
+        loginItem?.state = (SMAppService.mainApp.status == .enabled) ? .on : .off
     }
-
-    @objc private func openInputMonitoring() {
-        probe.requestInputMonitoring()
-        probe.openInputMonitoringSettings()
-    }
-
-    @objc private func openMicrophone() {
-        probe.requestMicAccess()
-        probe.openMicrophoneSettings()
-    }
-
-    @objc private func showOnboarding() { setup.present() }
-
-    @MainActor @objc private func openSettings() { settings.present() }
 }
 
 // MARK: - Hotkey management
 
-extension AppDelegate: NSMenuDelegate {
-    /// Rebuilds the Hotkeys / AI Cleanup / Dictionary submenus each time they
-    /// open so they reflect current state.
-    func menuNeedsUpdate(_ menu: NSMenu) {
-        if menu == cleanupMenu {
-            rebuildCleanupMenu()
-            return
-        }
-        if menu == dictionaryMenu {
-            rebuildDictionaryMenu()
-            return
-        }
-        guard menu == hotkeysMenu else { return }
-        menu.removeAllItems()
-
-        if hotkeyStore.hotkeys.isEmpty {
-            let empty = NSMenuItem(title: "No hotkeys set", action: nil, keyEquivalent: "")
-            empty.isEnabled = false
-            menu.addItem(empty)
-        } else {
-            let header = NSMenuItem(title: "Push-to-talk keys (click to remove):",
-                                    action: nil, keyEquivalent: "")
-            header.isEnabled = false
-            menu.addItem(header)
-            for hotkey in hotkeyStore.hotkeys {
-                let item = NSMenuItem(title: hotkey.name,
-                                      action: #selector(removeHotkeyClicked(_:)), keyEquivalent: "")
-                item.target = self
-                item.state = .on
-                item.representedObject = NSNumber(value: hotkey.rawValue)
-                menu.addItem(item)
-            }
-        }
-
-        menu.addItem(.separator())
-        let add = NSMenuItem(title: "Add Hotkey…", action: #selector(addHotkeyClicked), keyEquivalent: "")
-        add.target = self
-        menu.addItem(add)
-    }
-
-    @objc private func addHotkeyClicked() { presentAddHotkey() }
-
-    /// Shared hotkey-capture flow for both the Hotkeys menu and the Settings
-    /// window (`Actions.addHotkey`).
+extension AppDelegate {
+    /// Shared hotkey-capture flow, reached through the main window
+    /// (`Actions.addHotkey`).
     private func presentAddHotkey() {
         guard monitorActive, let monitor = hotkeyMonitor else {
             presentPermissionNeededAlert()
@@ -981,18 +789,11 @@ extension AppDelegate: NSMenuDelegate {
             let added = self.hotkeyStore.add(hotkey)
             self.hotkeyMonitor?.update(hotkeys: self.hotkeyStore.hotkeys)
             Log.write("hotkey \(added ? "added" : "already set"): \(hotkey.name)")
-            Task { @MainActor in self.settings.refresh() }
+            Task { @MainActor in self.mainWindow.refresh() }
         }
     }
 
-    @objc private func removeHotkeyClicked(_ sender: NSMenuItem) {
-        guard let raw = (sender.representedObject as? NSNumber)?.uint64Value,
-              let hotkey = Hotkey(rawValue: raw) else { return }
-        removeHotkey(hotkey)
-    }
-
-    /// Removes a hotkey and re-arms the live monitor. Shared by the menu and the
-    /// Settings window (`Actions.removeHotkey`).
+    /// Removes a hotkey and re-arms the live monitor (`Actions.removeHotkey`).
     private func removeHotkey(_ hotkey: Hotkey) {
         hotkeyStore.remove(hotkey)
         hotkeyMonitor?.update(hotkeys: hotkeyStore.hotkeys)
