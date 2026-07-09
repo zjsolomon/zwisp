@@ -11,6 +11,12 @@ public struct Configuration {
     public var dictionary: PersonalDictionary
     public var setup: Setup
     public var overlay: Overlay
+    /// The main window's Home equalizer. It reuses the tested `WaveLevelMeter`
+    /// math on a bigger grid than the floating pill; only the grid dimensions
+    /// differ (the Home view ignores the pill's geometry fields). The floating
+    /// pill's `overlay` config is deliberately untouched.
+    public var homeWave: Overlay
+    public var stats: Stats
 
     public init(
         whisperModel: String,
@@ -20,7 +26,9 @@ public struct Configuration {
         streaming: Streaming = Streaming(),
         dictionary: PersonalDictionary = PersonalDictionary(),
         setup: Setup = Setup(),
-        overlay: Overlay = Overlay()
+        overlay: Overlay = Overlay(),
+        homeWave: Overlay = Overlay(barCount: 21, rowCount: 7),
+        stats: Stats = Stats()
     ) {
         self.whisperModel = whisperModel
         self.audio = audio
@@ -30,6 +38,8 @@ public struct Configuration {
         self.dictionary = dictionary
         self.setup = setup
         self.overlay = overlay
+        self.homeWave = homeWave
+        self.stats = stats
     }
 
     /// Microphone capture / WhisperKit input format.
@@ -504,6 +514,19 @@ public struct Configuration {
             self.ollamaServerPollInterval = ollamaServerPollInterval
             self.minFreeBytesForSpeechModel = minFreeBytesForSpeechModel
             self.minFreeBytesForCleanupSetup = minFreeBytesForCleanupSetup
+        }
+    }
+
+    /// Local dictation statistics (`StatsStore`). Counts and durations only —
+    /// never transcript text.
+    public struct Stats {
+        /// Per-day rows older than this (in days, relative to the moment a new
+        /// dictation is recorded) are pruned. Lifetime totals survive pruning,
+        /// so history stays bounded without losing the running grand total.
+        public var retainedDays: Int
+
+        public init(retainedDays: Int = 90) {
+            self.retainedDays = retainedDays
         }
     }
 
