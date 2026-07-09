@@ -66,7 +66,7 @@ struct WritingStyleTests {
         // re-prefills the KV suffix.
         let base = Configuration.Cleanup.defaultSystemPrompt
         let rendered = Configuration.Cleanup.systemPrompt(
-            base: base, dictionary: ["Zied"], style: .formal)
+            base: base, dictionary: ["Ziedo"], style: .formal)
 
         let dictRange = try? #require(rendered.range(of: "PERSONAL DICTIONARY"))
         let styleRange = try? #require(rendered.range(of: "WRITING STYLE"))

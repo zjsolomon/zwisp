@@ -46,8 +46,16 @@ key held  ──►  record mic (16 kHz)  ──►  release  ──►  Whisper
   and fix punctuation — still fully offline, with guardrails so a bad model
   response never replaces your words.
 - **Personal dictionary** — teach zwisp names and terms it keeps mishearing
-  ("Ziedo", "zwisp", "Ollama") via the menu-bar **Dictionary** menu. Future
-  dictations use your exact spelling.
+  ("Ziedo", "zwisp", "WhisperKit"). Future dictations use your exact spelling.
+- **Per-app writing styles** — cleanup can write formally in Mail and casually
+  in Slack, chosen automatically from the app (and even the window title) you're
+  dictating into.
+- **Guided setup** — a first-run window walks through the permissions, downloads
+  the speech model with visible progress, and can install Ollama and the cleanup
+  model for you.
+- **A dictation wave** — a small 8-bit equalizer floats on screen while you talk,
+  so you can see the mic is hearing you. It never steals focus, and you can turn
+  it off.
 - **Lives in the menu bar** — no Dock icon and no windows. Can launch at login.
 - **Small codebase** — a compact, dependency-light Swift project that is
   straightforward to read and audit.
@@ -62,9 +70,9 @@ commands in [Quick start](#quick-start) are the whole install. You'll need:
   (`xcode-select --install`).
 
 `./install.sh` builds the app, copies it to `/Applications`, and launches it.
-The first launch walks you through a one-time permission setup (below). Once
-running, click the 🎙️ menu-bar icon → **Launch at Login** if you'd like it to
-start automatically on every boot — you can toggle that off there any time.
+The first launch opens the guided setup (below). Once running, open **Settings…**
+(⌘,) from the 🎙️ menu-bar icon and turn on **Launch at Login** if you'd like it
+to start automatically on every boot.
 
 > Prefer not to install into `/Applications`? Run `./build-app.sh` to produce
 > `zwisp.app` in the project folder and `open zwisp.app` from there.
@@ -107,14 +115,17 @@ later from Settings → Cleanup.
 ## Usage
 
 - Hold your **push-to-talk key** (Right ⌘ by default), speak, then release. The
-  text is typed at your cursor.
+  text is typed at your cursor. A small equalizer wave appears while you talk,
+  and keeps pulsing while zwisp is still thinking.
 - You can keep working while it thinks: dictations queue up and are typed in
   order. Injection politely waits until your hands are still (no keys for a
   moment, no modifier held), and if you've switched to a different app in the
   meantime it skips typing rather than dumping text into the wrong window
   (logged in `~/Library/Logs/zwisp.log`).
-- Click the menu-bar icon for hotkey settings, permission shortcuts, AI cleanup
-  (on/off and model choice), Launch at Login, and Quit.
+- **Settings…** (⌘, from the menu-bar icon) is where hotkeys, AI cleanup, the
+  personal dictionary, and writing-style rules live. The menu itself keeps quick
+  access to cleanup, the dictionary, permission shortcuts, the setup guide, and
+  Quit.
 
 ### What the icon colours mean
 
@@ -133,11 +144,12 @@ in words.
 
 ### Changing hotkeys
 
-Click the menu-bar icon → **Hotkeys**:
+**Settings… → General → Push-to-talk keys** (or the menu-bar **Hotkeys**
+submenu):
 
 - **Add** — choose **Add Hotkey…**, then press the modifier key you want. It's
   registered instantly.
-- **Remove** — click any listed key to remove it.
+- **Remove** — remove any listed key. The last one can't be removed.
 - **Multiple keys** — add as many as you like; holding *any* of them records.
 
 Only modifier keys (⌘ ⌥ ⌃ ⇧ and Fn 🌐) can be hotkeys — you hold one to talk, and
@@ -147,18 +159,49 @@ modifiers are distinct, so you can bind Right ⌘ without affecting Left ⌘.
 ### Personal dictionary
 
 Whisper spells names it has never seen however it pleases. When a dictation
-comes out with "zeddo" instead of "Ziedo":
+comes out with "zeedo" instead of "Ziedo":
 
-- **Add a word** — menu-bar icon → **Dictionary** → **Add Word…**, and type
-  the spelling you want (up to 4 words, e.g. a full name).
-- **Review / remove** — the same **Dictionary** menu lists your words; click
-  one to remove it.
+- **Add a word** — **Settings… → Dictionary** (or the menu-bar **Dictionary** →
+  **Add Word…**), and type the spelling you want (up to 4 words, e.g. a full
+  name).
+- **Review / remove** — both places list your words and let you remove one.
 
 Dictionary words steer dictations two ways: the AI cleanup model is told your
-exact spellings, and a built-in corrector fixes close mishearings ("zeddo" →
-"Ziedo", "oh llama" → "Ollama") even when cleanup is off. Entries are
-short terms — a name or phrase of at most 4 words — and everything stays on
-your Mac, like the rest of zwisp.
+exact spellings, and a deterministic corrector runs afterwards — even when
+cleanup is off — fixing casing ("whisperkit" → "WhisperKit"), split words
+("whisper kit" → "WhisperKit"), and close mishearings ("zeedo" → "Ziedo").
+
+That corrector is deliberately timid, because a wrong "correction" is worse than
+a missed one: short entries only get casing and split-word fixes, never fuzzy
+ones (at four letters, a single edit turns "data" into "Dana"), and a word that
+already spells another dictionary entry is never rewritten into a near
+neighbour. Longer entries — a full name, say — tolerate more, so "zeddo solomon"
+still lands on "Ziedo Solomon". Entries are short terms, at most 4 words, and
+everything stays on your Mac.
+
+### Per-app writing styles
+
+Cleanup can adapt to where the text is going. In **Settings… → Writing Styles**
+you set a default style and add per-app rules:
+
+- **Standard** — the normal cleanup: your words, properly punctuated.
+- **Formal (email)** — complete sentences and paragraph breaks, greetings and
+  sign-offs on their own lines. It reshapes layout only; it never invents a
+  greeting or a word you didn't say.
+- **Casual (chat)** — relaxed lowercase, no trailing periods, contractions kept.
+
+A rule matches on the app, optionally narrowed by a substring of the window
+title (so a specific browser tab can differ from the rest of the browser); the
+more specific rule wins. The style is decided when you *start* recording, so
+switching apps mid-dictation can't apply the wrong one.
+
+### The dictation wave
+
+While you hold the key, an 8-bit LED equalizer floats near the bottom of the
+screen and dances with your voice, then pulses while the transcript is being
+prepared. It's a click-through, non-activating panel — it never takes keyboard
+focus from the app you're dictating into. Turn it off in **Settings… → General →
+Show wave while dictating**.
 
 ## Optional: AI cleanup with Ollama
 
@@ -179,7 +222,8 @@ like "okay, let's see here" are your voice and stay in. It only:
 - fixes capitalisation and sentence punctuation.
 
 It uses [Ollama](https://ollama.com), which needs no API key and keeps everything
-local:
+local. The **setup window's AI cleanup section installs it for you** — or set it
+up by hand if you prefer:
 
 ```bash
 brew install ollama        # or download from ollama.com
@@ -187,13 +231,14 @@ ollama serve               # start the local server (also runs as a login servic
 ollama pull qwen3:4b-instruct    # ~2.5 GB, one time
 ```
 
-If Ollama is installed but not running, the menu shows **"Ollama isn't running —
-click to start"**, which launches it for you (the Ollama app if you have it,
-otherwise `ollama serve`).
+Either way, zwisp finds Ollama by asking whether a server answers on the local
+port — a Homebrew CLI install with no `Ollama.app` works fine. If it's installed
+but not running, the menu shows **"Ollama isn't running — click to start"**,
+which launches it for you.
 
-Then leave **AI Cleanup (Ollama) → Clean Up Transcripts** enabled in the menu
-(it's on by default). The same submenu lists your installed Ollama models —
-click one to use it for cleanup.
+Cleanup is on by default. Toggle it and pick which of your installed models to
+use in **Settings… → Cleanup**, or from the menu-bar **AI Cleanup (Ollama)**
+submenu.
 
 ### Which model?
 
@@ -244,10 +289,17 @@ All tunable settings live in one file:
   - `openai_whisper-base.en` — tiny and fastest
 - **AI cleanup** — the `Cleanup` struct sets the default Ollama model, prompt,
   endpoint, timeout, keep-alive, and output-length budget. The active model is
-  picked from the menu (AI Cleanup → model list).
-- **Hotkeys** — configured from the menu bar (see
+  picked in Settings → Cleanup.
+- **Hotkeys** — configured in the app (see
   [Changing hotkeys](#changing-hotkeys)); the default is defined by
   `HotkeyStore.defaultHotkeys`.
+- **Streaming** — the `Streaming` struct tunes eager transcription while the key
+  is held (and `enabled` is its kill switch).
+- **Dictionary matching** — `PersonalDictionary` holds the corrector's
+  conservative thresholds: how long an entry must be to fuzzy-match at all, and
+  when a second edit is tolerated.
+- **The wave** — the `Overlay` struct sizes and animates the dictation
+  equalizer.
 - **Paste instead of type** — `TextInjector.swift` types via synthetic Unicode
   key events. Swap it for a pasteboard + ⌘V approach if you prefer.
 
@@ -275,10 +327,20 @@ release build on every push and pull request.
 | `Hotkey.swift` | The push-to-talk modifier keys and their flag masks |
 | `HotkeyStore.swift` | Persists the user's hotkeys (add/remove) |
 | `CleanupService.swift` | Optional local LLM cleanup pass via Ollama |
+| `WritingStyle.swift` | The styles and the prompt block each contributes |
+| `StyleRules.swift` | Per-app style rules: storage and resolution |
+| `DictionaryStore.swift` | Persists the personal dictionary |
+| `TranscriptCorrector.swift` | Deterministic dictionary post-pass over a transcript |
 | `StreamingTranscript.swift` | Confirms stable segments during eager (streaming) transcription |
 | `AudioPadding.swift` | Pads sub-second recordings past WhisperKit's decode floor |
 | `TextInjector.swift` | Types transcribed text into the focused app |
 | `TranscriptFormatter.swift` | Joins WhisperKit segments into text |
+| `WaveLevelMeter.swift` | The dictation wave's maths (levels → lit LED rows) |
+| `OverlayStore.swift` | Persists the show-the-wave preference |
+| `OnboardingState.swift` | The permission checklist model and its copy |
+| `SetupState.swift` | Composes the checklist with the setup window's install phases |
+| `SpeechModelLayout.swift` | Where the speech model lives on disk, and whether it's complete |
+| `OllamaPull.swift` | Parses Ollama's `/api/pull` progress stream |
 | `Logger.swift` | Append-to-file logger |
 
 **`zwisp`** — the app: system-framework and WhisperKit glue on top of the core:
@@ -292,12 +354,19 @@ release build on every push and pull request.
 | `AudioRecorder.swift` | `AVAudioEngine` capture, resampled to 16 kHz mono |
 | `Transcriber.swift` | WhisperKit wrapper (on-device speech-to-text), serialized |
 | `StreamingWorker.swift` | Eagerly transcribes the growing buffer while the key is held |
+| `DictationOverlay.swift` | The on-screen wave: a click-through, non-activating panel |
+| `FrontmostContext.swift` | The frontmost app and window title, captured at record time |
+| `PermissionProbe.swift` | Live permission status and System Settings deep links |
+| `SpeechModelInstaller.swift` | Downloads the speech model with progress |
+| `OllamaInstaller.swift` | Installs Ollama (signature-verified) and pulls the cleanup model |
+| `SetupWindow/Model/View.swift` | The guided first-run setup |
+| `SettingsWindow/Model/View.swift` | The Settings window |
 
 ## Limitations
 
 - Transcription streams **while you hold the key** (audio is transcribed and
   confirmed in the background as you speak), but the text only appears after
-  you release — there's no live-preview overlay yet.
+  you release — the on-screen wave shows your voice, not the words.
 - The app is ad-hoc / self-signed, so permissions are tied to a specific build;
   rebuilding may occasionally require re-granting Accessibility. See
   [`setup-signing.sh`](setup-signing.sh) for a stable local signing identity that
