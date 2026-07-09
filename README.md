@@ -60,11 +60,6 @@ key held  ──►  record mic (16 kHz)  ──►  release  ──►  Whisper
 - **Small codebase** — a compact, dependency-light Swift project that is
   straightforward to read and audit.
 
-## Screenshots
-
-<!-- screenshots: Home (live wave + stats), Setup, Writing Styles — Assets/screenshot-*.png -->
-*Coming with the next set of assets.*
-
 ## Installation
 
 There's no notarized download yet, so you build it once from source — the two
