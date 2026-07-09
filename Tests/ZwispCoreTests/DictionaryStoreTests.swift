@@ -25,8 +25,8 @@ struct DictionaryStoreTests {
 
     @Test func addTrimsWhitespaceAndStores() {
         let store = DictionaryStore(defaults: freshDefaults())
-        #expect(store.add("  Zied \n") == .added)
-        #expect(store.entries == ["zwisp", "Zied"])
+        #expect(store.add("  Ziedo \n") == .added)
+        #expect(store.entries == ["zwisp", "Ziedo"])
     }
 
     @Test func addRejectsEmptyAndWhitespaceOnly() {
@@ -59,16 +59,16 @@ struct DictionaryStoreTests {
     @Test func reAddingWithDifferentCasingReplacesInPlace() {
         let store = DictionaryStore(defaults: freshDefaults())
         store.add("whisperkit")
-        store.add("Zied")
+        store.add("Ziedo")
         #expect(store.add("WhisperKit") == .updated)
-        #expect(store.entries == ["zwisp", "WhisperKit", "Zied"])
+        #expect(store.entries == ["zwisp", "WhisperKit", "Ziedo"])
     }
 
     @Test func removeDeletesOnlyTheExactEntry() {
         let store = DictionaryStore(defaults: freshDefaults())
-        store.add("Zied")
+        store.add("Ziedo")
         store.add("WhisperKit")
-        store.remove("Zied")
+        store.remove("Ziedo")
         #expect(store.entries == ["zwisp", "WhisperKit"])
         store.remove("not present")
         #expect(store.entries == ["zwisp", "WhisperKit"])
@@ -77,9 +77,9 @@ struct DictionaryStoreTests {
     @Test func changesPersistAcrossInstances() {
         let defaults = freshDefaults()
         let first = DictionaryStore(defaults: defaults)
-        first.add("Zied")
+        first.add("Ziedo")
         first.add("WhisperKit")
-        first.remove("Zied")
+        first.remove("Ziedo")
 
         let second = DictionaryStore(defaults: defaults)
         #expect(second.entries == ["zwisp", "WhisperKit"])

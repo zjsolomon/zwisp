@@ -54,9 +54,9 @@ public enum WritingStyle: String, CaseIterable, Codable, Sendable {
             style changes layout and punctuation only.
             Example:
             Input: hi sarah um just wanted to follow up on the contract could \
-            you send the signed copy by friday thanks zied
+            you send the signed copy by friday thanks ziedo
             Output: Hi Sarah,\\n\\nJust wanted to follow up on the contract. \
-            Could you send the signed copy by Friday?\\n\\nThanks,\\nZied
+            Could you send the signed copy by Friday?\\n\\nThanks,\\nZiedo
             """
         case .casual:
             return """
