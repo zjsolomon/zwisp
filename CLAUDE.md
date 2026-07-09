@@ -5,9 +5,14 @@ Guidance for working in this repo. See `README.md` for the user-facing docs.
 ## What this is
 
 zwisp is a **private, on-device push-to-talk dictation app for macOS** (menu-bar
-accessory app, no Dock icon, no window). Hold a modifier key → record mic → release →
-WhisperKit transcribes locally → text is typed into the focused app. Optional local-LLM
-cleanup via Ollama. Nothing leaves the machine. Apple Silicon, macOS 14+, Swift 5.9+.
+accessory app, no Dock icon; one dark-branded main window opened on demand). Hold a
+modifier key → record mic → release → WhisperKit transcribes locally → text is typed
+into the focused app. Optional local-LLM cleanup via Ollama. Nothing leaves the
+machine. Apple Silicon, macOS 14+, Swift 5.9+.
+
+**Positioning (owner's intent):** a personal tool, published as a polished showcase —
+premium presentation matters, but the repo does not solicit issues/PRs and must never
+read as a "portfolio piece" out loud. Keep README copy in a confident product voice.
 
 ## Build & test
 
@@ -43,7 +48,10 @@ WhisperKit/CoreML. **Keep this split when adding code.**
   dictionary persistence), `TranscriptCorrector.swift` (deterministic dictionary post-pass),
   `StreamingTranscript.swift` (streaming confirmation state machine), `AudioPadding.swift`,
   `TextInjector.swift`, `TranscriptFormatter.swift`, `WaveLevelMeter.swift` (deterministic
-  dictation-wave math), `OverlayStore.swift` (overlay on/off preference), `Logger.swift`.
+  dictation-wave math), `OverlayStore.swift` (overlay on/off preference), `StatsStore.swift`
+  (local dictation stats — day + lifetime aggregates, counts/durations ONLY, never
+  transcript text), `MainNav.swift` (the main window's `MainSection` list + the
+  setup-attention gate), `Logger.swift`.
 - **`Sources/zwisp/`** — the executable: system-framework + WhisperKit glue on top of the
   core. Not unit-tested. Files: `main.swift`, `AppDelegate.swift` (wires everything, owns the
   status item; `@MainActor`), `HotkeyMonitor.swift` (global `CGEventTap`),
@@ -53,22 +61,25 @@ WhisperKit/CoreML. **Keep this split when adding code.**
   (eager transcription loop while the key is held), `PermissionProbe.swift` (live permission
   status + Settings deep links), `SpeechModelInstaller.swift` (downloads the WhisperKit model
   with progress), `OllamaInstaller.swift` (installs Ollama + pulls the cleanup model),
-  `SetupWindow.swift`/`SetupModel.swift`/`SetupView.swift` (the SwiftUI first-run setup trio,
-  replacing the old `OnboardingWindow`), `DictationOverlay.swift` (the on-screen dictation
-  wave — click-through panel + 30 Hz redraw + SwiftUI view).
+  `SetupModel.swift`/`SettingsModel.swift` (the two `@Observable` view-model seams, kept from
+  the old two-window layout), `MainWindow/` (the unified main window: `MainWindow.swift`
+  window plumbing + merged frozen `Actions`, `MainWindowModel`/`MainView` sidebar navigation,
+  `Theme`/`DesignComponents` design system, one `*SectionView` per `MainSection`,
+  `HomeModel`/`HomeWaveView`/`WaveFeed` for the dashboard), `DictationOverlay.swift` (the
+  on-screen dictation wave — click-through panel + 30 Hz redraw + SwiftUI view).
 - **`Tests/ZwispCoreTests/`** — tests for the core library only.
 
-**Rule (from README/Contributing): new logic goes in `ZwispCore` with a test** so it stays
-covered by CI. The app layer should stay a thin glue layer.
+**Rule: new logic goes in `ZwispCore` with a test** so it stays covered by CI. The app
+layer should stay a thin glue layer.
 
 ## Gotchas
 
 - **Three separate macOS permissions**, easy to confuse: **Microphone** (record), **Input
   Monitoring** (CGEventTap to *receive* the hotkey), **Accessibility** (to *type* text into
   other apps). **Launch no longer fires permission prompts** — they're user-initiated from
-  the setup window (`SetupWindow`/`SetupModel`/`SetupView`, a SwiftUI trio; reopenable via the
-  menu's "Setup Guide…"), and the mic prompt fires on the first dictation attempt. The setup
-  window is now all-encompassing, not just a permission checklist: it also **downloads the
+  the main window's Setup section (`SetupSectionView`, still driven by the tested
+  `SetupModel`), and the mic prompt fires on the first dictation attempt. Setup is
+  all-encompassing, not just a permission checklist: it also **downloads the
   speech model with visible progress** (`SpeechModelInstaller` → `WhisperKit.download`, then
   `Transcriber(modelFolder:)` — the app no longer relies on WhisperKit's invisible first-use
   fetch), and offers an **optional AI-cleanup chain** (`OllamaInstaller`): install Ollama from
@@ -83,11 +94,14 @@ covered by CI. The app layer should stay a thin glue layer.
   (start vs install), and the install chain never installs Ollama.app alongside a CLI copy.
   **Auto-show gate = hotkey permissions
   missing OR the speech model isn't on disk** (`permissions.needsSetup ||
-  speechInstaller.installedFolder() == nil`); Ollama/cleanup missing alone **never** auto-shows
-  (it's optional — don't nag about a multi-GB download). Live status checks + deep links live
+  speechInstaller.installedFolder() == nil` → `mainWindow.present(section: .setup)`);
+  Ollama/cleanup missing alone **never** auto-shows
+  (it's optional — don't nag about a multi-GB download). The same gate drives the sidebar's
+  orange Setup badge (`MainNav.setupNeedsAttention`, core, tested). Live status checks +
+  deep links live
   in `PermissionProbe.swift`; the pure checklist model (`OnboardingState`, row copy,
   `needsSetup`) plus `SetupState`/`InstallPhase`/`SpeechModelLayout`/`OllamaPull` live in core
-  with tests. `AppDelegate` is `@MainActor` (it owns the main-actor installers + setup window).
+  with tests. `AppDelegate` is `@MainActor` (it owns the main-actor installers + main window).
 - **Only modifier keys** (⌘ ⌥ ⌃ ⇧ Fn) can be hotkeys — held while talking, don't auto-repeat.
   Left/right modifiers are distinct. Default is Right ⌘ (`HotkeyStore.defaultHotkeys`).
 - **Fn/Globe needs keycode filtering**: arrow, Home/End, and Page keys also set the Fn flag bit,
@@ -127,8 +141,9 @@ covered by CI. The app layer should stay a thin glue layer.
   seam — after `cleanup.clean` in `AppDelegate.process` — which covers batch, streamed,
   cleanup-off, and every fallback path; don't add a second application site. Its thresholds
   are deliberately conservative (short entries never fuzzy-match) — a wrong "correction" is
-  worse than a missed one. Words are added/removed from the menu-bar Dictionary menu
-  (`rebuildDictionaryMenu` / `addDictionaryWordClicked` in `AppDelegate`). **A system-wide
+  worse than a missed one. Words are added/removed in the window's Dictionary section
+  (`DictionarySectionView`) or via the menu bar's quick "Add Dictionary Word…" alert
+  (`addDictionaryWordClicked` in `AppDelegate`). **A system-wide
   right-click macOS Service was tried and abandoned** (2026-07): registration looked correct
   in `pbs -dump_pboard`, but the item never surfaced in any app's Services menu even after
   `pbs -flush`, enabling it in `pbs NSServicesStatus`, and assigning shortcuts — don't
@@ -150,13 +165,38 @@ covered by CI. The app layer should stay a thin glue layer.
   app-switch notification can't see). `currentResolvedStyle()` **short-circuits to `.standard` with no
   AX call** when there are no rules and the default is standard — the default setup pays nothing.
   `lastWarmedStyle` tracks what's prefilled; only a *changed* style triggers a warm.
-- **Settings window** (`SettingsWindow`/`SettingsModel`/`SettingsView`) is the one place to manage
-  hotkeys, cleanup, dictionary, and writing-style rules — SwiftUI in an `NSHostingController`, same
-  accessory-app lifecycle as `OnboardingWindow`. It's `@MainActor`; `AppDelegate` holds it as a
-  `@MainActor private lazy var` and talks to it only through the **frozen `SettingsWindow.Actions`
-  API** (closures back into `AppDelegate` for the actual mutations, so menu and window share one code
-  path — e.g. `presentAddHotkey`, `removeHotkey`, `setLaunchAtLogin`). Opened from the menu-bar
-  "Settings…" item (⌘,). The old submenus still work.
+- **The main window** (`Sources/zwisp/MainWindow/`) is the ONE window: sidebar navigation
+  (`MainSection`: Home / Setup / Dictation / AI Cleanup / Dictionary / Writing Styles) over a
+  hand-rolled dark layout — NOT `NavigationSplitView`, whose material/selection chrome fights the
+  branded near-black look. `MainWindow.swift` owns the NSWindow (900×620 min 820×560,
+  `.fullSizeContentView`, transparent titlebar, **forced `NSAppearance(named: .darkAqua)`** — the
+  brand is dark regardless of system appearance; solid `Theme` colors only, no
+  `.ultraThinMaterial`, so nothing tints with the desktop). It keeps both old liveness
+  mechanisms: the 1 s `.common`-mode poll timer while open (drives `SetupModel.refreshLive`) and
+  a `didBecomeKey` refresh. `AppDelegate` holds it as a `@MainActor private lazy var` and talks
+  to it only through the **frozen `MainWindow.Actions` API** — the union of the old Setup +
+  Settings actions (11 closures; `openSetupGuide` became internal `model.select(.setup)`).
+  `SetupModel`/`SettingsModel` survive as the view-model seams; `Theme`/`DesignComponents`
+  carry the design system (palette from `Assets/generate-logo.py`, the overlay's 8-bit LED
+  rules: sharp cells, instant steps, opacity-only animation, Reduce Motion fallbacks). Opened
+  from the menu-bar "Open zwisp…" (⌘,) or by re-launching the app
+  (`applicationShouldHandleReopen`). **The menu bar is deliberately tiny** (cleanup toggle,
+  quick dictionary add, Launch at Login, Quit) — `menuWillOpen` re-syncs the two stateful
+  items; the old three-submenu rebuild machinery is gone, and the "Ollama isn't running" rescue
+  lives in the Setup/AI Cleanup sections (`cleanupActionIsStartOnly`).
+- **Home dashboard**: `HomeModel` (stats + hotkey names), `HomeWaveView` (the big equalizer —
+  its own `WaveLevelMeter` on the larger `Configuration.homeWave` grid, driven by a
+  `TimelineView` reading `AudioRecorder.currentLevel()`; suspended automatically when not on
+  screen), and `WaveFeed` (a one-field `@Observable` phase bridge). `AppDelegate` flips
+  `waveFeed.phase` beside the existing overlay seams but **never gated on
+  `overlayStore.enabled`** — that preference governs only the floating pill.
+  `DictationOverlay` itself is independent and untouched; its never-steal-focus rules stand.
+- **Dictation stats** (`StatsStore`, core, tested): JSON at
+  `~/Library/Application Support/zwisp/stats.json`, day + lifetime aggregates, pruned past
+  `Configuration.Stats.retainedDays`. **Counts and durations only — transcript text must never
+  cross the seam.** Recorded at exactly one site: `finishJob`, after a successful
+  `injector.inject` (empty results and focus-moved drops don't count), passing
+  `StatsStore.wordCount(of:)` + the `DictationTimings` captured in `process`.
 - WhisperKit downloads the model from Hugging Face on first use (internet once), then runs
   offline. Transcription is **streamed while the key is held**: `StreamingWorker` re-transcribes
   the growing buffer (~1 s cadence) with `clipTimestamps` skipping confirmed audio, and
@@ -183,7 +223,7 @@ covered by CI. The app layer should stay a thin glue layer.
   stray tap, `beginThinking()` after `jobsInFlight += 1`), and `finishJob()`'s defer — which
   hides only when **`jobsInFlight == 0 && !isRecording`** (queued jobs keep it pulsing until the
   last drains; `!isRecording` yields the panel to a re-pressed hotkey). User toggle is
-  `OverlayStore` ("overlayEnabled", absent → on), exposed in Settings' General tab.
+  `OverlayStore` ("overlayEnabled", absent → on), exposed in the window's Dictation section.
 - Signing: `build-app.sh` prefers a stable self-signed identity (`setup-signing.sh`) so grants
   persist across rebuilds; falls back to ad-hoc, which may require re-granting Accessibility.
 

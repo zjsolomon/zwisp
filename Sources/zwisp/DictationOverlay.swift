@@ -308,7 +308,7 @@ final class DictationOverlay {
         let timer = Timer(timeInterval: config.pollInterval, repeats: true) { [weak self] _ in
             // Scheduled on RunLoop.main below, so the body always runs on the
             // main actor — assert it so touching main-actor state from this
-            // @Sendable closure is sound (repo idiom, see SetupWindow.swift).
+            // @Sendable closure is sound (repo idiom, see MainWindow.swift).
             MainActor.assumeIsolated { self?.tick() }
         }
         // `.common` mode so the wave keeps animating during menu tracking, which
