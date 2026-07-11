@@ -195,6 +195,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         startSpeechModelSetup()
     }
 
+    /// Launching zwisp while it's already running (Finder double-click, `open`)
+    /// presents the main window — an accessory app has no Dock icon to click,
+    /// so this is the "open the program" gesture users reach for.
+    func applicationShouldHandleReopen(_ sender: NSApplication,
+                                       hasVisibleWindows flag: Bool) -> Bool {
+        mainWindow.present()
+        return false
+    }
+
     /// Entry point for readying the speech model. Uses the on-disk copy if the
     /// installer reports a complete folder; otherwise kicks off a download whose
     /// progress the setup window shows, loading once it lands. Also the retry
