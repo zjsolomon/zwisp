@@ -344,8 +344,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // Show the wave now the mic is actually open (past the permission
         // guards): no pill for a denied mic, and this also flips a still-visible
-        // thinking pill back to recording on a fast re-press.
+        // thinking pill back to recording on a fast re-press. The Home feed is
+        // NOT gated on the overlay preference — that governs only the pill.
         if overlayStore.enabled { overlay.showRecording() }
+        waveFeed.phase = .recording
         refreshState()
     }
 
@@ -362,6 +364,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             worker?.cancel()
             Log.write("too short; skipping")
             overlay.hide()   // no job to drain the pill, so hide it here
+            waveFeed.phase = .idle
             refreshState()
             return
         }
@@ -379,6 +382,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         jobsInFlight += 1
         refreshState()
         overlay.beginThinking()   // recording done; pulse while the pipeline runs
+        waveFeed.phase = .thinking
 
         // Chain onto the previous job: strictly serial, strictly in order.
         let previous = pipelineTail
@@ -398,16 +402,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let transcribeStart = Date()
         let result = await transcribe(samples: samples, with: transcriber, worker: worker)
         let raw = result.text
+        let transcribeSeconds = Date().timeIntervalSince(transcribeStart)
         Log.write(String(format: "raw transcript (%.2fs%@): '%@'",
-                         Date().timeIntervalSince(transcribeStart),
-                         result.streamed ? ", streamed" : "", raw))
+                         transcribeSeconds, result.streamed ? ", streamed" : "", raw))
         if style != .standard {
             Log.write("writing style: \(style.rawValue)")
         }
         let cleanupStart = Date()
         let text = await cleanup.clean(raw, style: style)
-        Log.write(String(format: "final text (%.2fs): '%@'",
-                         Date().timeIntervalSince(cleanupStart), text))
+        let cleanupSeconds = Date().timeIntervalSince(cleanupStart)
+        Log.write(String(format: "final text (%.2fs): '%@'", cleanupSeconds, text))
         // Deterministic dictionary pass, applied last so it covers every path
         // to the final text: batch, streamed, cleanup-off, and all the cleanup
         // fallbacks. Also enforces exact casing the LLM may normalize away.
@@ -416,7 +420,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for correction in corrected.corrections {
             Log.write("dictionary corrected '\(correction.original)' → '\(correction.replacement)'")
         }
-        await finishJob(injecting: corrected.text, targetPID: targetPID)
+        await finishJob(injecting: corrected.text, targetPID: targetPID,
+                        timings: DictationTimings(transcribeSeconds: transcribeSeconds,
+                                                  cleanupSeconds: cleanupSeconds))
     }
 
     /// Streamed transcription when the worker confirmed audio during the hold
@@ -440,14 +446,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Waits for the user's hands to be still, checks focus hasn't moved, then
     /// types the result. Awaited by the pipeline so injections stay in order.
     @MainActor
-    private func finishJob(injecting text: String, targetPID: pid_t?) async {
+    private func finishJob(injecting text: String, targetPID: pid_t?,
+                           timings: DictationTimings) async {
         defer {
             jobsInFlight -= 1
             // Drain hook: hide the wave only once the LAST queued job finishes
             // (several may still be pulsing), and only if we're not recording —
             // a re-pressed hotkey's `showRecording()` now owns the panel, so we
             // must not yank it out from under a fresh take.
-            if jobsInFlight == 0 && !isRecording { overlay.hide() }
+            if jobsInFlight == 0 && !isRecording {
+                overlay.hide()
+                waveFeed.phase = .idle
+            }
             refreshState()
             // The dictation just exercised Ollama; sync the blue/green icon.
             refreshCleanupStatus()
@@ -467,6 +477,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         injector.inject(text)
         Log.write("injected \(text.count) chars")
+        // Stats count only dictations that actually typed: empty results and
+        // focus-moved drops return above. The word COUNT crosses the seam —
+        // the text itself is never stored.
+        statsStore.record(wordCount: StatsStore.wordCount(of: text), timings: timings)
+        mainWindow.refreshHomeIfVisible()
     }
 
     /// Injecting while the user is typing interleaves synthetic and physical
