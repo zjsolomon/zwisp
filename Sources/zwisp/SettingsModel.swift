@@ -4,7 +4,7 @@ import ServiceManagement
 import ZwispCore
 
 /// View model backing `SettingsView`. Holds the injected stores/cleanup/config
-/// plus the `SettingsWindow.Actions` closures, and exposes plain snapshot
+/// plus the `MainWindow.Actions` closures, and exposes plain snapshot
 /// properties the SwiftUI views read. Every mutation follows one shape: mutate
 /// the store, call the matching `Actions` closure (the app layer owns the side
 /// effects — monitor re-arm, cleanup re-warm, style pre-warm), then re-snapshot.
@@ -21,7 +21,7 @@ final class SettingsModel {
     private let cleanup: CleanupService
     private let overlayStore: OverlayStore
     let config: Configuration
-    private let actions: SettingsWindow.Actions
+    private let actions: MainWindow.Actions
 
     // MARK: - Snapshots (re-read on `refresh()`)
 
@@ -46,7 +46,7 @@ final class SettingsModel {
     init(hotkeyStore: HotkeyStore, dictionaryStore: DictionaryStore,
          styleRuleStore: StyleRuleStore, cleanup: CleanupService,
          overlayStore: OverlayStore, config: Configuration,
-         actions: SettingsWindow.Actions) {
+         actions: MainWindow.Actions) {
         self.hotkeyStore = hotkeyStore
         self.dictionaryStore = dictionaryStore
         self.styleRuleStore = styleRuleStore
@@ -201,12 +201,6 @@ final class SettingsModel {
     func setOverlayEnabled(_ enabled: Bool) {
         overlayStore.enabled = enabled
         snapshot()
-    }
-
-    // MARK: - Setup guide
-
-    func openSetupGuide() {
-        actions.openSetupGuide()
     }
 
     // MARK: - App pickers (for rule creation)
