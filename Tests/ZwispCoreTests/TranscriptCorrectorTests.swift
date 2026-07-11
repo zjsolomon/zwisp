@@ -4,7 +4,7 @@ import Foundation
 
 struct TranscriptCorrectorTests {
     // Default config: fuzzyMinLength 5, fuzzyTwoEditMinLength 8. Short names
-    // (like "Zied") are deliberately fuzzy-ineligible under the defaults.
+    // (like "Dana") are deliberately fuzzy-ineligible under the defaults.
     private let defaults = Configuration.PersonalDictionary()
 
     // MARK: - Exact / casing
@@ -32,30 +32,40 @@ struct TranscriptCorrectorTests {
     // MARK: - Fuzzy
 
     @Test func fuzzyMatchFixesMisheardName() {
-        // "Zied" is only 4 letters, so it needs a lowered fuzzy threshold to be
-        // eligible at all — exactly the tradeoff its config knob exposes.
-        let config = Configuration.PersonalDictionary(fuzzyMinLength: 4)
-        let result = TranscriptCorrector.correct("call zeed", dictionary: ["Zied"], config: config)
-        #expect(result.text == "call Zied")
-        #expect(result.corrections == [.init(original: "zeed", replacement: "Zied")])
+        // "Ziedo" is exactly fuzzyMinLength, so it is eligible under the
+        // defaults — but only one edit away, which "zeedo" is.
+        let result = TranscriptCorrector.correct("call zeedo", dictionary: ["Ziedo"])
+        #expect(result.text == "call Ziedo")
+        #expect(result.corrections == [.init(original: "zeedo", replacement: "Ziedo")])
+    }
+
+    @Test func twoEditMishearingNeedsALoweredThreshold() {
+        // "zeddo" is two edits from "Ziedo", and at 5 letters only one is
+        // tolerated by default — exactly the tradeoff the config knob exposes.
+        #expect(TranscriptCorrector.correct("call zeddo",
+                                            dictionary: ["Ziedo"], config: defaults).text == "call zeddo")
+
+        let config = Configuration.PersonalDictionary(fuzzyTwoEditMinLength: 5)
+        let result = TranscriptCorrector.correct("call zeddo", dictionary: ["Ziedo"], config: config)
+        #expect(result.text == "call Ziedo")
+        #expect(result.corrections == [.init(original: "zeddo", replacement: "Ziedo")])
     }
 
     @Test func fuzzyMatchFixesMisheardMultiWordName() {
-        // Normalized "ziedsolomon" is 11 chars, so 2 edits are tolerated and the
-        // name is eligible under the *defaults*.
-        let result = TranscriptCorrector.correct("email zeed solomon",
-                                                 dictionary: ["Zied Solomon"])
-        #expect(result.text == "email Zied Solomon")
-        #expect(result.corrections == [.init(original: "zeed solomon", replacement: "Zied Solomon")])
+        // Normalized "ziedosolomon" is 12 chars, so 2 edits are tolerated and
+        // even "zeddo solomon" is fixed under the *defaults*.
+        let result = TranscriptCorrector.correct("email zeddo solomon",
+                                                 dictionary: ["Ziedo Solomon"])
+        #expect(result.text == "email Ziedo Solomon")
+        #expect(result.corrections == [.init(original: "zeddo solomon", replacement: "Ziedo Solomon")])
     }
 
     // MARK: - Punctuation preservation
 
     @Test func punctuationSurvivesAroundReplacement() {
-        let config = Configuration.PersonalDictionary(fuzzyMinLength: 4)
-        let result = TranscriptCorrector.correct("ask zeed.", dictionary: ["Zied"], config: config)
-        #expect(result.text == "ask Zied.")
-        #expect(result.corrections == [.init(original: "zeed", replacement: "Zied")])
+        let result = TranscriptCorrector.correct("ask zeedo.", dictionary: ["Ziedo"])
+        #expect(result.text == "ask Ziedo.")
+        #expect(result.corrections == [.init(original: "zeedo", replacement: "Ziedo")])
     }
 
     @Test func surroundingBracketsAndQuotesSurvive() {
@@ -67,11 +77,11 @@ struct TranscriptCorrectorTests {
     // MARK: - Negative / safety
 
     @Test func shortEntryDoesNotCaptureCommonWords() {
-        // Under the defaults "Zied" is fuzzy-ineligible, so nearby everyday
-        // words ("died", "tried") are left completely alone.
-        let result = TranscriptCorrector.correct("he died and tried again",
-                                                 dictionary: ["Zied"], config: defaults)
-        #expect(result.text == "he died and tried again")
+        // Under the defaults "Dana" is fuzzy-ineligible, so nearby everyday
+        // words ("data", "dane") are left completely alone.
+        let result = TranscriptCorrector.correct("the data came back",
+                                                 dictionary: ["Dana"], config: defaults)
+        #expect(result.text == "the data came back")
         #expect(result.corrections.isEmpty)
     }
 

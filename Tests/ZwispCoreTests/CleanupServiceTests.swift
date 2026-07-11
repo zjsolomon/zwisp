@@ -145,13 +145,13 @@ struct CleanupServiceTests {
 
     @Test func buildRequestRendersDictionaryIntoSystemPrompt() throws {
         let service = makeService(FakeClient(result: .failure(URLError(.badURL))))
-        service.dictionaryProvider = { ["Zied", "WhisperKit"] }
+        service.dictionaryProvider = { ["Ziedo", "WhisperKit"] }
 
         let body = try #require(service.buildRequest(for: "hello").httpBody)
         let object = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
         let system = try #require(object["system"] as? String)
         #expect(system.contains("PERSONAL DICTIONARY"))
-        #expect(system.contains("Zied, WhisperKit"))
+        #expect(system.contains("Ziedo, WhisperKit"))
         // The base instructions must survive untouched ahead of the dictionary.
         #expect(system.hasPrefix(Configuration.Cleanup.defaultSystemPrompt))
     }
@@ -169,7 +169,7 @@ struct CleanupServiceTests {
         // a different system prompt than real requests, the prefill would be
         // wasted and every dictation would pay it again.
         let service = makeService(FakeClient(result: .failure(URLError(.badURL))))
-        service.dictionaryProvider = { ["Zied"] }
+        service.dictionaryProvider = { ["Ziedo"] }
 
         func system(of request: URLRequest) throws -> String {
             let body = try #require(request.httpBody)
@@ -426,7 +426,7 @@ struct CleanupServiceTests {
 
     @Test func standardStyleRequestIsByteIdenticalToNoStyleCall() throws {
         let service = makeService(FakeClient(result: .failure(URLError(.badURL))))
-        service.dictionaryProvider = { ["Zied"] }
+        service.dictionaryProvider = { ["Ziedo"] }
 
         let noStyle = service.buildRequest(for: "hello there")
         let standard = service.buildRequest(for: "hello there", style: .standard)
@@ -438,7 +438,7 @@ struct CleanupServiceTests {
         // The cache-sharing contract: warm-up must prefill the exact system
         // prompt real requests use, per style, or the prefill is wasted.
         let service = makeService(FakeClient(result: .failure(URLError(.badURL))))
-        service.dictionaryProvider = { ["Zied"] }
+        service.dictionaryProvider = { ["Ziedo"] }
 
         #expect(try system(of: service.buildWarmupRequest(style: .formal))
                 == system(of: service.buildRequest(for: "hello", style: .formal)))
@@ -458,8 +458,8 @@ struct CleanupServiceTests {
     @Test func sanitizePassesFormalOutputWithParagraphBreaks() {
         // Formal output introduces \n\n paragraph breaks and a sign-off line;
         // added whitespace can't hurt word retention or bust the length cap.
-        let raw = "hi sarah just wanted to follow up on the contract could you send the signed copy by friday thanks zied"
-        let formal = "Hi Sarah,\n\nJust wanted to follow up on the contract. Could you send the signed copy by Friday?\n\nThanks,\nZied"
+        let raw = "hi sarah just wanted to follow up on the contract could you send the signed copy by friday thanks ziedo"
+        let formal = "Hi Sarah,\n\nJust wanted to follow up on the contract. Could you send the signed copy by Friday?\n\nThanks,\nZiedo"
         #expect(CleanupService.sanitize(formal, raw: raw) == formal)
     }
 

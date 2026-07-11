@@ -3,7 +3,7 @@ import Foundation
 /// Deterministic post-pass that fixes personal-dictionary terms in a final
 /// transcript. It runs *after* the optional LLM cleanup pass (which may or may
 /// not have already fixed the term) as a last, predictable safety net: Whisper
-/// routinely mishears names and jargon the user cares about ("Zied" → "zeed",
+/// routinely mishears names and jargon the user cares about ("Ziedo" → "zeedo",
 /// "WhisperKit" → "whisper kit"), and this restores the exact spelling the user
 /// registered.
 ///
@@ -11,7 +11,7 @@ import Foundation
 /// worse than a missed one.** Everything here is biased towards leaving text
 /// alone unless the match is close and unambiguous:
 ///   - short entries never fuzzy-match (edit distance turns everyday words into
-///     names — "died" → "Zied"); they only fix casing or a split-word join,
+///     names — "data" → "Dana"); they only fix casing or a split-word join,
 ///   - a window that already spells *another* dictionary entry is never
 ///     fuzzy-rewritten into a near neighbour,
 ///   - exact (casing/join) matches always beat fuzzy ones.
@@ -20,8 +20,8 @@ import Foundation
 /// does — lowercased, letters and digits only — so casing and attached
 /// punctuation don't hide an otherwise perfect match. Replacement, by contrast,
 /// only ever touches the matched *word run*: leading/trailing punctuation and
-/// all surrounding whitespace are preserved verbatim, so `"ask zeed."` becomes
-/// `"ask Zied."` and never `"ask Zied"`.
+/// all surrounding whitespace are preserved verbatim, so `"ask zeedo."` becomes
+/// `"ask Ziedo."` and never `"ask Ziedo"`.
 ///
 /// Pure `ZwispCore` logic (Foundation only), so it is fully unit-tested.
 public enum TranscriptCorrector {

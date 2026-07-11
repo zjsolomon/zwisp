@@ -1,7 +1,7 @@
 import Foundation
 
 /// The user's personal dictionary — names and terms Whisper keeps mishearing
-/// ("Zied", "WhisperKit") — persisted in `UserDefaults`.
+/// ("Ziedo", "WhisperKit") — persisted in `UserDefaults`.
 ///
 /// Entries feed two consumers: the cleanup system prompt (the LLM is told the
 /// exact spellings) and `TranscriptCorrector` (a deterministic post-pass that

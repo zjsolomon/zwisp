@@ -401,7 +401,7 @@ public struct Configuration {
         public var maxEntryWords: Int
         /// Entries whose normalized form is shorter than this never fuzzy-match
         /// (exact/casing/join matches only) — at 4 letters, edit distance 1
-        /// turns everyday words into names ("died" → "Zied").
+        /// turns everyday words into names ("data" → "Dana").
         public var fuzzyMinLength: Int
         /// Normalized length from which 2 edits are tolerated; between
         /// `fuzzyMinLength` and this, only 1 edit is.
