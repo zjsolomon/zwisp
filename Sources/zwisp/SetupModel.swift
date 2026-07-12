@@ -25,6 +25,9 @@ final class SetupModel {
 
     private(set) var permissions: OnboardingState
     private(set) var speechPhase: InstallPhase
+    /// Explanatory/recovery line under the speech-model row ("first launch
+    /// compiles the model — minutes are normal", "retry resumes"), or `nil`.
+    private(set) var speechHint: String?
     private(set) var cleanupModelPhase: InstallPhase
     private(set) var cleanupModelName: String
     private(set) var readyMessage: String
@@ -53,6 +56,7 @@ final class SetupModel {
         let initialPermissions = probe.state()
         self.permissions = initialPermissions
         self.speechPhase = speechInstaller.phase
+        self.speechHint = speechInstaller.phaseHint
         self.cleanupModelPhase = cleanupInstaller.phase
         self.cleanupModelName = cleanup.modelName
         self.readyMessage = OnboardingState.readyMessage(
@@ -80,6 +84,7 @@ final class SetupModel {
     func refresh() {
         permissions = probe.state()
         speechPhase = speechInstaller.phase
+        speechHint = speechInstaller.phaseHint
         cleanupModelPhase = cleanupInstaller.phase
         cleanupModelName = cleanup.modelName
         readyMessage = OnboardingState.readyMessage(

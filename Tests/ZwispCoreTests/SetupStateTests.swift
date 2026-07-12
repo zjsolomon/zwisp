@@ -99,6 +99,21 @@ struct SetupStateTests {
         #expect(InstallPhase.installing(stage: "Pulling", fraction: -0.03).statusLine == "Pulling — 0%")
     }
 
+    // MARK: - InstallPhase.elapsedLabel
+
+    @Test func elapsedLabelRendersMinutesAndPaddedSeconds() {
+        #expect(InstallPhase.elapsedLabel(seconds: 0) == "0:00")
+        #expect(InstallPhase.elapsedLabel(seconds: 7) == "0:07")
+        #expect(InstallPhase.elapsedLabel(seconds: 61) == "1:01")
+        #expect(InstallPhase.elapsedLabel(seconds: 130.9) == "2:10")
+        #expect(InstallPhase.elapsedLabel(seconds: 600) == "10:00")
+    }
+
+    @Test func elapsedLabelClampsNegativeElapsed() {
+        // A clock adjustment mid-stage must not print "-0:01".
+        #expect(InstallPhase.elapsedLabel(seconds: -5) == "0:00")
+    }
+
     // MARK: - InstallPhase flags
 
     @Test func isInstalledAndIsBusyReflectTheCase() {

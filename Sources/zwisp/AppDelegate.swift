@@ -250,18 +250,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Compiles/loads WhisperKit from a ready model folder off the main thread,
     /// flipping `modelReady` and the installer's phase when it finishes.
+    ///
+    /// The first load on a new Mac compiles the model for the Neural Engine and
+    /// can take minutes; the elapsed time is logged so a load that *is* wedged
+    /// (rather than merely slow) is distinguishable in `~/Library/Logs/zwisp.log`.
     private func loadTranscriber(from folder: URL) {
         speechInstaller.markLoading()
+        Log.write("speech model: loading + compiling from \(folder.path)")
+        let started = Date()
         Task {
             do {
                 let t = try await Transcriber(
                     modelFolder: folder,
                     minimumTranscribableSamples: config.audio.minimumTranscribableSamples)
                 await MainActor.run {
+                    Log.write(String(format: "speech model: compiled + loaded in %.1fs",
+                                     Date().timeIntervalSince(started)))
                     self.transcriber = t
                     self.modelReady = true
                     self.speechInstaller.markInstalled()
-                    Log.write("model loaded")
                     self.refreshState()
                 }
             } catch {

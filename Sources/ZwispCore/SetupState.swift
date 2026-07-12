@@ -22,6 +22,14 @@ public enum InstallPhase: Equatable {
         return false
     }
 
+    /// Renders elapsed seconds as "m:ss" for a long-running indeterminate
+    /// stage ("Optimizing for this Mac — 1:42"). A visibly ticking clock is
+    /// what separates "working" from "hung" when there's no fraction to show.
+    public static func elapsedLabel(seconds: TimeInterval) -> String {
+        let total = max(0, Int(seconds))
+        return String(format: "%d:%02d", total / 60, total % 60)
+    }
+
     /// One-line status for the setup row. Percent is rendered only when a
     /// fraction is known, and clamped to 0–100 so a slightly-out-of-range
     /// fraction (rounding, an over-count) can't print "-3%" or "104%".

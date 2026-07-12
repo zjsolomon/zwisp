@@ -39,6 +39,7 @@ struct SetupSectionView: View {
                         .padding(.bottom, Theme.spaceXS)
                     installRow(title: "Speech model",
                                phase: setup.speechPhase,
+                               hint: setup.speechHint,
                                onRetry: { setup.retrySpeechDownload() })
                 }
             }
@@ -110,11 +111,13 @@ struct SetupSectionView: View {
         }
     }
 
-    /// One dependency row: title + the phase's status caption, with a trailing
-    /// pixel progress bar while installing and a "Retry" button when failed.
+    /// One dependency row: title + the phase's status caption (plus an optional
+    /// explanatory/recovery `hint` beneath), with a trailing pixel progress bar
+    /// while installing and a "Retry" button when failed.
     @ViewBuilder
     private func installRow(title: String,
                             phase: InstallPhase,
+                            hint: String? = nil,
                             showsDivider: Bool = false,
                             onRetry: @escaping () -> Void) -> some View {
         HStack(spacing: Theme.spaceM) {
@@ -126,6 +129,12 @@ struct SetupSectionView: View {
                 Text(phase.statusLine)
                     .font(Theme.caption)
                     .foregroundStyle(Theme.textSecondary)
+                if let hint {
+                    Text(hint)
+                        .font(Theme.caption)
+                        .foregroundStyle(Theme.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             Spacer()
             switch phase {
