@@ -32,7 +32,7 @@ boot.
 > `zwisp.app` in the project folder — `open` it from there.
 
 ```
-key held  ──►  record mic (16 kHz)  ──►  release  ──►  WhisperKit (on-device)  ──►  types text
+key held  ──►  record mic  ──►  release  ──►  WhisperKit (on-device)  ──►  AI cleanup (local, optional)  ──►  types text
        menu bar:  🔴 warming up   🟢 ready   🔵 ready + AI cleanup
 ```
 
