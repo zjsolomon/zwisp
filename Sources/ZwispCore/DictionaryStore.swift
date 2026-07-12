@@ -5,9 +5,8 @@ import Foundation
 ///
 /// Entries feed two consumers: the cleanup system prompt (the LLM is told the
 /// exact spellings) and `TranscriptCorrector` (a deterministic post-pass that
-/// works even when Ollama is off). Words arrive via the macOS Service ("Add to
-/// zwisp Dictionary" on selected text), so `add` validates: a stray paragraph
-/// selection must not become a "word".
+/// works even when cleanup is off). Entries can arrive as arbitrary pasted
+/// text, so `add` validates: a stray paragraph must not become a "word".
 public final class DictionaryStore {
     /// Insertion order, which is also prompt order. Use `sortedEntries` for UI.
     public private(set) var entries: [String]

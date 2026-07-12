@@ -64,25 +64,27 @@ public struct Configuration {
         }
     }
 
-    /// Optional local-LLM cleanup pass (Ollama).
+    /// Optional local-LLM cleanup pass, served by the llama-server bundled
+    /// inside zwisp.app — a supervised localhost subprocess, so there's nothing
+    /// to install and the model never unloads while zwisp runs.
     public struct Cleanup {
-        public var endpoint: URL
-        /// Any small instruct model pulled in Ollama, e.g. `ollama pull qwen3:4b-instruct`.
-        /// This is the *default*; the user's pick (persisted by `CleanupService`)
-        /// overrides it.
-        public var model: String
         public var temperature: Double
         public var timeout: TimeInterval
         public var systemPrompt: String
-        /// How long Ollama keeps the model in memory after a request. A negative
-        /// duration means "never unload": the cold start (model load + system
-        /// prompt prefill) costs several seconds and can blow `timeout`, so a
-        /// resident model (~2–3 GB for a 4B) is the price of instant cleanup.
-        public var keepAlive: String
         /// Timeout for the warm-up request (`CleanupService.warmUp`), which pays
         /// the cold start deliberately so dictations don't. Nothing user-facing
         /// waits on it, so it can be generous.
         public var warmupTimeout: TimeInterval
+        /// Ceiling on how long cleanup may *predictably* take before it's skipped
+        /// up front. Cleanup generates output at roughly the input's length, so a
+        /// long dictation on a slow engine reliably blows `timeout` — the user
+        /// then waits the full 8s only to get the raw transcript anyway (max
+        /// latency, zero benefit). When a measured generation throughput exists,
+        /// `CleanupService.clean` estimates the wait and, if it exceeds this cap,
+        /// returns the raw text immediately instead of paying the doomed round
+        /// trip. When the engine can keep up the prediction simply passes, so
+        /// this is a permanent safety net that costs nothing.
+        public var maxPredictedWait: TimeInterval
         /// Response-length budget: the model may generate at most
         /// `input character count × multiplier` tokens, clamped to
         /// [minResponseTokens, maxResponseTokens]. Cleanup output should be about
@@ -91,10 +93,10 @@ public struct Configuration {
         public var minResponseTokens: Int
         public var maxResponseTokens: Int
         public var responseTokenMultiplier: Int
+        public var server: Server
+        public var modelFile: ModelFile
 
         public init(
-            endpoint: URL = URL(string: "http://127.0.0.1:11434/api/generate")!,
-            model: String = "qwen3:4b-instruct",
             // Near-greedy: transcription editing has one right answer; sampling
             // freedom only invites paraphrase.
             temperature: Double = 0.1,
@@ -103,39 +105,107 @@ public struct Configuration {
             // beyond it, the raw transcript is typed instead.
             timeout: TimeInterval = 8,
             systemPrompt: String = Cleanup.defaultSystemPrompt,
-            keepAlive: String = "-1m",
             warmupTimeout: TimeInterval = 60,
+            maxPredictedWait: TimeInterval = 4,
             minResponseTokens: Int = 100,
             maxResponseTokens: Int = 2_048,
-            responseTokenMultiplier: Int = 2
+            responseTokenMultiplier: Int = 2,
+            server: Server = Server(),
+            modelFile: ModelFile = ModelFile()
         ) {
-            self.endpoint = endpoint
-            self.model = model
             self.temperature = temperature
             self.timeout = timeout
             self.systemPrompt = systemPrompt
-            self.keepAlive = keepAlive
             self.warmupTimeout = warmupTimeout
+            self.maxPredictedWait = maxPredictedWait
             self.minResponseTokens = minResponseTokens
             self.maxResponseTokens = maxResponseTokens
             self.responseTokenMultiplier = responseTokenMultiplier
+            self.server = server
+            self.modelFile = modelFile
         }
 
-        /// Ollama's model-listing endpoint (`/api/tags`), derived from `endpoint`
-        /// so a custom host/port automatically applies to both.
-        public var tagsEndpoint: URL {
-            var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)!
-            components.path = "/api/tags"
-            return components.url!
+        /// How the bundled llama-server is launched. The speculation flags are
+        /// the winners of the 2026-07 benchmark sweep on the target M4 Air:
+        /// n-gram lookup drafts cleanup output straight from the transcript in
+        /// the prompt (cleanup mostly *copies* its input), which measured
+        /// 2.4–2.8× faster end-to-end with byte-identical output.
+        public struct Server {
+            /// Localhost port. Deliberately high and uncommon; the supervisor
+            /// walks to a neighbouring port if something else holds it.
+            public var port: Int
+            /// KV-cache size in tokens. The system prompt is ~1K and dictations
+            /// re-use the cached prefix, so 4096 leaves ample headroom.
+            public var contextSize: Int
+            /// `--spec-ngram-simple-size-n`: length of the trailing n-gram
+            /// matched against the context when drafting.
+            public var ngramSizeN: Int
+            /// `--spec-ngram-simple-size-m`: how many tokens a draft copies.
+            public var ngramSizeM: Int
+            /// How long to wait for `/health` after launch (the model load is
+            /// a few seconds from a warm disk; allow a cold one).
+            public var startTimeout: TimeInterval
+            /// How often to poll `/health` while waiting.
+            public var healthPollInterval: TimeInterval
+
+            public init(port: Int = 43917, contextSize: Int = 4_096,
+                        ngramSizeN: Int = 4, ngramSizeM: Int = 24,
+                        startTimeout: TimeInterval = 60,
+                        healthPollInterval: TimeInterval = 0.5) {
+                self.port = port
+                self.contextSize = contextSize
+                self.ngramSizeN = ngramSizeN
+                self.ngramSizeM = ngramSizeM
+                self.startTimeout = startTimeout
+                self.healthPollInterval = healthPollInterval
+            }
+
+            /// The full launch argument list, testable without spawning
+            /// anything. `--cache-reuse` enables chunked KV reuse so a style
+            /// switch re-prefills only the changed suffix; `--parallel 1`
+            /// keeps one slot whose cache every request shares.
+            public func arguments(modelPath: String, port: Int) -> [String] {
+                [
+                    "--model", modelPath,
+                    "--host", "127.0.0.1",
+                    "--port", String(port),
+                    "--no-webui",
+                    "--ctx-size", String(contextSize),
+                    "--parallel", "1",
+                    "--flash-attn", "on",
+                    "--cache-reuse", "256",
+                    "--spec-type", "ngram-simple",
+                    "--spec-ngram-simple-size-n", String(ngramSizeN),
+                    "--spec-ngram-simple-size-m", String(ngramSizeM),
+                ]
+            }
         }
 
-        /// Ollama's model-pull endpoint (`/api/pull`), derived from `endpoint`
-        /// the same way as `tagsEndpoint` so a custom host/port applies to all
-        /// three calls (generate, tags, pull).
-        public var pullEndpoint: URL {
-            var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)!
-            components.path = "/api/pull"
-            return components.url!
+        /// The one cleanup model zwisp serves (downloaded once by
+        /// `CleanupModelInstaller`, verified by size and SHA-256). Pinned —
+        /// same qwen3-4b weights and quant the Ollama era used, so cleanup
+        /// quality is unchanged.
+        public struct ModelFile {
+            public var fileName: String
+            /// What the UI calls the model.
+            public var displayName: String
+            public var downloadURL: URL
+            public var sha256: String
+            public var byteSize: Int64
+
+            public init(
+                fileName: String = "Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+                displayName: String = "Qwen3 4B",
+                downloadURL: URL = URL(string: "https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q4_K_M.gguf")!,
+                sha256: String = "3605803b982cb64aead44f6c1b2ae36e3acdb41d8e46c8a94c6533bc4c67e597",
+                byteSize: Int64 = 2_497_281_120
+            ) {
+                self.fileName = fileName
+                self.displayName = displayName
+                self.downloadURL = downloadURL
+                self.sha256 = sha256
+                self.byteSize = byteSize
+            }
         }
 
         // Prompt design notes (matter more than any single rule):
@@ -229,18 +299,18 @@ public struct Configuration {
         Output: There are two steps here: 1. Back up the data. 2. Run the migration.
         """
 
-        /// Renders the system prompt actually sent to Ollama: the base prompt,
-        /// plus the user's personal dictionary when it has entries, plus the
-        /// writing-style block last. The dictionary lives in the *system* prompt
-        /// (not `wrapPrompt`) so `CleanupService.warmUp` prefills it into the KV
-        /// cache once — a dictionary in the per-request prompt would be
+        /// Renders the system prompt actually sent to the engine: the base
+        /// prompt, plus the user's personal dictionary when it has entries, plus
+        /// the writing-style block last. The dictionary lives in the *system*
+        /// prompt (not `wrapPrompt`) so `CleanupService.warmUp` prefills it into
+        /// the KV cache once — a dictionary in the per-request prompt would be
         /// re-prefilled on every dictation and eat into the timeout budget.
         ///
         /// Block order is fixed as base → dictionary → style, and the style
-        /// block is appended *last* on purpose: Ollama reuses the longest common
-        /// prefix of the KV cache, so switching style re-prefills only the short
-        /// style suffix rather than the whole prompt. With `.standard` style and
-        /// an empty dictionary the result is byte-identical to `base`.
+        /// block is appended *last* on purpose: llama-server reuses the longest
+        /// common prefix of the KV cache, so switching style re-prefills only
+        /// the short style suffix rather than the whole prompt. With `.standard`
+        /// style and an empty dictionary the result is byte-identical to `base`.
         public static func systemPrompt(base: String, dictionary: [String],
                                         style: WritingStyle = .standard) -> String {
             var result = base
@@ -480,40 +550,20 @@ public struct Configuration {
         }
     }
 
-    /// First-run installer knobs: where to fetch Ollama, how to recognise a
-    /// valid install, and the disk-space floors that gate a download before it
-    /// starts (better to refuse than to half-download and fail). Kept here so
-    /// the distribution URL and thresholds are one edit away when Ollama's
-    /// packaging drifts.
+    /// First-run installer knobs: the disk-space floors that gate a download
+    /// before it starts (better to refuse than to half-download and fail).
     public struct Setup {
-        /// Official signed Ollama macOS zip.
-        public var ollamaDownloadURL: URL
-        /// Bundle IDs a downloaded Ollama.app must have to be trusted — a
-        /// verification gate so we never launch an app we didn't expect.
-        public var ollamaBundleIDs: [String]
-        /// How long to wait for Ollama's local server to come up after launch.
-        public var ollamaServerStartTimeout: TimeInterval
-        /// How often to poll for the server while waiting.
-        public var ollamaServerPollInterval: TimeInterval
         /// Refuse the speech-model download below this much free disk.
         public var minFreeBytesForSpeechModel: Int64
-        /// Refuse the cleanup chain (zip + app + model + headroom) below this.
-        public var minFreeBytesForCleanupSetup: Int64
+        /// Refuse the cleanup-model download (2.5 GB file + headroom) below this.
+        public var minFreeBytesForCleanupModel: Int64
 
         public init(
-            ollamaDownloadURL: URL = URL(string: "https://ollama.com/download/Ollama-darwin.zip")!,
-            ollamaBundleIDs: [String] = ["com.ollama.ollama", "com.electron.ollama"],
-            ollamaServerStartTimeout: TimeInterval = 60,
-            ollamaServerPollInterval: TimeInterval = 2,
             minFreeBytesForSpeechModel: Int64 = 2 * 1_024 * 1_024 * 1_024,
-            minFreeBytesForCleanupSetup: Int64 = 6 * 1_024 * 1_024 * 1_024
+            minFreeBytesForCleanupModel: Int64 = 4 * 1_024 * 1_024 * 1_024
         ) {
-            self.ollamaDownloadURL = ollamaDownloadURL
-            self.ollamaBundleIDs = ollamaBundleIDs
-            self.ollamaServerStartTimeout = ollamaServerStartTimeout
-            self.ollamaServerPollInterval = ollamaServerPollInterval
             self.minFreeBytesForSpeechModel = minFreeBytesForSpeechModel
-            self.minFreeBytesForCleanupSetup = minFreeBytesForCleanupSetup
+            self.minFreeBytesForCleanupModel = minFreeBytesForCleanupModel
         }
     }
 

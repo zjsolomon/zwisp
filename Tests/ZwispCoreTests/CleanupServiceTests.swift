@@ -3,243 +3,330 @@ import Foundation
 @testable import ZwispCore
 
 struct CleanupServiceTests {
-    /// A fake HTTP client that returns a canned result (or throws) without
-    /// touching the network.
-    private struct FakeClient: HTTPClient {
-        var result: Result<(Data, URLResponse), Error>
-        func data(for request: URLRequest) async throws -> (Data, URLResponse) {
-            try result.get()
+    /// A fake engine that returns a canned generation (or throws) and records
+    /// every request, so prompts and budgets are asserted without a server.
+    private final class FakeEngine: CleanupEngine, @unchecked Sendable {
+        struct Request {
+            let system: String
+            let prompt: String
+            let maxTokens: Int
+            let timeout: TimeInterval
         }
+
+        var result: Result<CleanupGeneration, Error>
+        var ready: Bool
+        private let lock = NSLock()
+        private var _requests: [Request] = []
+        var requests: [Request] { lock.lock(); defer { lock.unlock() }; return _requests }
+
+        init(result: Result<CleanupGeneration, Error>, ready: Bool = true) {
+            self.result = result
+            self.ready = ready
+        }
+
+        func generate(system: String, prompt: String, maxTokens: Int,
+                      timeout: TimeInterval) async throws -> CleanupGeneration {
+            lock.lock()
+            _requests.append(Request(system: system, prompt: prompt,
+                                     maxTokens: maxTokens, timeout: timeout))
+            lock.unlock()
+            return try result.get()
+        }
+
+        func isReady() async -> Bool { ready }
     }
 
-    private let endpoint = URL(string: "http://127.0.0.1:11434/api/generate")!
+    private func generation(_ text: String,
+                            timings: CleanupGeneration.Timings? = nil) -> CleanupGeneration {
+        CleanupGeneration(text: text, timings: timings)
+    }
 
-    private func response(_ status: Int) -> HTTPURLResponse {
-        HTTPURLResponse(url: endpoint, statusCode: status, httpVersion: nil, headerFields: nil)!
+    /// Timings whose generation rate is `tokensPerSecond` over `tokens` tokens.
+    private func timings(tokens: Int, tokensPerSecond: Double) -> CleanupGeneration.Timings {
+        CleanupGeneration.Timings(prefillTokens: 100, prefillSeconds: 0.1,
+                                  generatedTokens: tokens,
+                                  generatedSeconds: Double(tokens) / tokensPerSecond)
     }
 
     /// Builds a service backed by an isolated UserDefaults suite so tests never
     /// touch (or depend on) real preferences.
-    private func makeService(_ client: HTTPClient, enabled: Bool = true) -> CleanupService {
+    private func makeService(_ engine: CleanupEngine, enabled: Bool = true,
+                             log: @escaping (String) -> Void = { _ in }) -> CleanupService {
         let defaults = UserDefaults(suiteName: "zwispTests-\(UUID().uuidString)")!
-        // No-op log: tests must not append to the real ~/Library/Logs file.
-        let service = CleanupService(config: Configuration.Cleanup(), httpClient: client,
-                                     defaults: defaults, log: { _ in })
+        // No-op log by default: tests must not append to the real ~/Library/Logs file.
+        let service = CleanupService(config: Configuration.Cleanup(), engine: engine,
+                                     defaults: defaults, log: log)
         service.enabled = enabled
         return service
-    }
-
-    private func json(_ string: String) -> Data { Data(string.utf8) }
-
-    // MARK: - parse()
-
-    @Test func parseExtractsAndTrimsResponseField() {
-        let data = json(#"{"response":"  Hello world.  "}"#)
-        #expect(CleanupService.parse(data: data, response: response(200)) == "Hello world.")
-    }
-
-    @Test func parseReturnsNilForNon200() {
-        #expect(CleanupService.parse(data: json(#"{"response":"Hi"}"#), response: response(500)) == nil)
-    }
-
-    @Test func parseReturnsNilForEmptyResponseField() {
-        #expect(CleanupService.parse(data: json(#"{"response":"   "}"#), response: response(200)) == nil)
-    }
-
-    @Test func parseReturnsNilForMalformedJSON() {
-        #expect(CleanupService.parse(data: json("not json"), response: response(200)) == nil)
     }
 
     // MARK: - clean()
 
     @Test func cleanReturnsCleanedTextOnSuccess() async {
-        let service = makeService(FakeClient(result: .success((json(#"{"response":"Cleaned."}"#), response(200)))))
+        let service = makeService(FakeEngine(result: .success(generation("Cleaned."))))
         #expect(await service.clean("raw dictation") == "Cleaned.")
     }
 
-    @Test func cleanFallsBackToRawWhenServerUnavailable() async {
-        let service = makeService(FakeClient(result: .failure(URLError(.cannotConnectToHost))))
+    @Test func cleanFallsBackToRawWhenEngineUnavailable() async {
+        let service = makeService(FakeEngine(result: .failure(URLError(.cannotConnectToHost))))
         #expect(await service.clean("raw dictation") == "raw dictation")
     }
 
-    @Test func cleanFallsBackToRawOnUnusableResponse() async {
-        let service = makeService(FakeClient(result: .success((json("nope"), response(200)))))
+    @Test func cleanFallsBackToRawOnEmptyOutput() async {
+        let service = makeService(FakeEngine(result: .success(generation("  \n "))))
         #expect(await service.clean("raw dictation") == "raw dictation")
     }
 
-    @Test func cleanSkipsNetworkWhenDisabled() async {
-        // The client would throw if invoked; disabled cleanup must not call it.
-        let service = makeService(FakeClient(result: .failure(URLError(.badURL))), enabled: false)
+    @Test func cleanSkipsEngineWhenDisabled() async {
+        // The engine would return "Cleaned." if invoked; disabled must not call it.
+        let engine = FakeEngine(result: .success(generation("Cleaned.")))
+        let service = makeService(engine, enabled: false)
         #expect(await service.clean("raw dictation") == "raw dictation")
+        #expect(engine.requests.isEmpty)
     }
 
     @Test func cleanSkipsEmptyInput() async {
-        let service = makeService(FakeClient(result: .failure(URLError(.badURL))))
+        let engine = FakeEngine(result: .success(generation("Cleaned.")))
+        let service = makeService(engine)
         #expect(await service.clean("") == "")
+        #expect(engine.requests.isEmpty)
     }
 
     @Test func cleanFallsBackToRawWhenOutputFailsSanityChecks() async {
         // A truncated <think> block means the whole output is chain-of-thought.
-        let service = makeService(FakeClient(result: .success(
-            (json(#"{"response":"<think>The user wants me to"}"#), response(200)))))
+        let service = makeService(FakeEngine(result: .success(
+            generation("<think>The user wants me to"))))
         #expect(await service.clean("raw dictation") == "raw dictation")
+    }
+
+    @Test func cleanSendsWrappedPromptRenderedSystemAndBudget() async {
+        let engine = FakeEngine(result: .success(generation("Cleaned.")))
+        let service = makeService(engine)
+        service.dictionaryProvider = { ["Ziedo", "WhisperKit"] }
+
+        _ = await service.clean("hello there")
+
+        let request = engine.requests[0]
+        // The transcript is wrapped in a delimited instruction, so it's embedded
+        // rather than sent verbatim.
+        #expect(request.prompt.contains("hello there"))
+        #expect(request.prompt.contains("<<<"))
+        // The system prompt carries the personal dictionary, after the intact base.
+        #expect(request.system.contains("PERSONAL DICTIONARY"))
+        #expect(request.system.contains("Ziedo, WhisperKit"))
+        #expect(request.system.hasPrefix(Configuration.Cleanup.defaultSystemPrompt))
+        // Budget: 11 chars × 2, floored at the 100-token minimum.
+        #expect(request.maxTokens == 100)
+        #expect(request.timeout == Configuration.Cleanup().timeout)
+    }
+
+    @Test func cleanLeavesSystemPromptAloneWhenDictionaryIsEmpty() async {
+        let engine = FakeEngine(result: .success(generation("Cleaned.")))
+        let service = makeService(engine)
+
+        _ = await service.clean("hello")
+        #expect(engine.requests[0].system == Configuration.Cleanup.defaultSystemPrompt)
     }
 
     // MARK: - status()
 
-    @Test func statusIsOffWhenDisabledWithoutTouchingTheNetwork() async {
-        // The client would throw if invoked; a disabled service must not call it.
-        let service = makeService(FakeClient(result: .failure(URLError(.badURL))), enabled: false)
+    @Test func statusIsOffWhenDisabledWithoutTouchingTheEngine() async {
+        let service = makeService(FakeEngine(result: .success(generation("x")), ready: true),
+                                  enabled: false)
         #expect(await service.status() == .off)
     }
 
-    @Test func statusIsActiveWhenSelectedModelInstalled() async {
-        let data = json(#"{"models":[{"name":"qwen3:4b-instruct"},{"name":"other:1b"}]}"#)
-        let service = makeService(FakeClient(result: .success((data, response(200)))))
-        service.model = "qwen3:4b-instruct"
-        #expect(await service.status() == .active(model: "qwen3:4b-instruct"))
+    @Test func statusIsActiveWithTheBundledModelNameWhenEngineIsReady() async {
+        let service = makeService(FakeEngine(result: .success(generation("x")), ready: true))
+        #expect(await service.status() == .active(model: Configuration.Cleanup().modelFile.displayName))
     }
 
-    @Test func statusIsUnavailableWhenOllamaIsDown() async {
-        let service = makeService(FakeClient(result: .failure(URLError(.cannotConnectToHost))))
+    @Test func statusIsUnavailableWhenEngineIsDown() async {
+        let service = makeService(FakeEngine(result: .success(generation("x")), ready: false))
         #expect(await service.status() == .unavailable)
-    }
-
-    @Test func statusIsUnavailableWhenSelectedModelIsMissing() async {
-        let data = json(#"{"models":[{"name":"other:1b"}]}"#)
-        let service = makeService(FakeClient(result: .success((data, response(200)))))
-        service.model = "qwen3:4b-instruct"
-        #expect(await service.status() == .unavailable)
-    }
-
-    // MARK: - buildRequest()
-
-    @Test func buildRequestEncodesModelPromptAndHeaders() throws {
-        let config = Configuration.Cleanup(model: "llama3.2:3b", temperature: 0.2)
-        let defaults = UserDefaults(suiteName: "zwispTests-\(UUID().uuidString)")!
-        let service = CleanupService(
-            config: config,
-            httpClient: FakeClient(result: .failure(URLError(.badURL))),
-            defaults: defaults
-        )
-
-        let request = service.buildRequest(for: "hello there")
-        #expect(request.httpMethod == "POST")
-        #expect(request.value(forHTTPHeaderField: "Content-Type") == "application/json")
-
-        let body = try #require(request.httpBody)
-        let object = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
-        #expect(object["model"] as? String == "llama3.2:3b")
-        // The transcript is wrapped in a delimited instruction, so it's embedded
-        // rather than sent verbatim.
-        #expect((object["prompt"] as? String)?.contains("hello there") == true)
-        #expect(object["stream"] as? Bool == false)
-        // Guardrails: suppress reasoning, keep the model resident, budget the output.
-        #expect(object["think"] as? Bool == false)
-        #expect(object["keep_alive"] as? String == "-1m")
-        let options = try #require(object["options"] as? [String: Any])
-        #expect(options["num_predict"] as? Int == 100)   // 11 chars × 2, floored at min
-    }
-
-    // MARK: - Personal dictionary in the system prompt
-
-    @Test func buildRequestRendersDictionaryIntoSystemPrompt() throws {
-        let service = makeService(FakeClient(result: .failure(URLError(.badURL))))
-        service.dictionaryProvider = { ["Ziedo", "WhisperKit"] }
-
-        let body = try #require(service.buildRequest(for: "hello").httpBody)
-        let object = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
-        let system = try #require(object["system"] as? String)
-        #expect(system.contains("PERSONAL DICTIONARY"))
-        #expect(system.contains("Ziedo, WhisperKit"))
-        // The base instructions must survive untouched ahead of the dictionary.
-        #expect(system.hasPrefix(Configuration.Cleanup.defaultSystemPrompt))
-    }
-
-    @Test func buildRequestLeavesSystemPromptAloneWhenDictionaryIsEmpty() throws {
-        let service = makeService(FakeClient(result: .failure(URLError(.badURL))))
-
-        let body = try #require(service.buildRequest(for: "hello").httpBody)
-        let object = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
-        #expect(object["system"] as? String == Configuration.Cleanup.defaultSystemPrompt)
-    }
-
-    @Test func warmupRequestSharesDictionaryBearingSystemPrompt() throws {
-        // Warm-up exists to prefill the system prompt's KV cache; if it rendered
-        // a different system prompt than real requests, the prefill would be
-        // wasted and every dictation would pay it again.
-        let service = makeService(FakeClient(result: .failure(URLError(.badURL))))
-        service.dictionaryProvider = { ["Ziedo"] }
-
-        func system(of request: URLRequest) throws -> String {
-            let body = try #require(request.httpBody)
-            let object = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
-            return try #require(object["system"] as? String)
-        }
-        #expect(try system(of: service.buildWarmupRequest())
-            == system(of: service.buildRequest(for: "hello")))
     }
 
     // MARK: - warmUp()
 
-    @Test func warmupRequestSharesPromptPrefixAndGeneratesOneToken() throws {
-        let config = Configuration.Cleanup(model: "llama3.2:3b", warmupTimeout: 45)
-        let defaults = UserDefaults(suiteName: "zwispTests-\(UUID().uuidString)")!
-        let service = CleanupService(
-            config: config,
-            httpClient: FakeClient(result: .failure(URLError(.badURL))),
-            defaults: defaults
-        )
+    @Test func warmUpGeneratesOneTokenThroughTheSharedPromptShape() async {
+        let engine = FakeEngine(result: .success(generation("R")))
+        let service = makeService(engine)
+        service.dictionaryProvider = { ["Ziedo"] }
 
-        let request = service.buildWarmupRequest()
-        #expect(request.httpMethod == "POST")
-        // Cold loads can exceed the dictation timeout; the warm-up gets its own.
-        #expect(request.timeoutInterval == 45)
-
-        let body = try #require(request.httpBody)
-        let object = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
-        #expect(object["model"] as? String == "llama3.2:3b")
-        #expect(object["system"] as? String == config.systemPrompt)
-        // Same wrapped-prompt shape as a real dictation, so the prefilled KV
-        // cache prefix carries over to real requests.
-        let realPrompt = try #require(CleanupService.wrapPrompt("x").components(separatedBy: "<<<").first)
-        #expect((object["prompt"] as? String)?.hasPrefix(realPrompt) == true)
-        // Side effects only — generate as little as possible.
-        let options = try #require(object["options"] as? [String: Any])
-        #expect(options["num_predict"] as? Int == 1)
-    }
-
-    @Test func warmUpSucceedsAgainstAHealthyServer() async {
-        let service = makeService(FakeClient(result: .success((json("{}"), response(200)))))
         #expect(await service.warmUp() == true)
+
+        let warm = engine.requests[0]
+        // Side effects only — generate as little as possible.
+        #expect(warm.maxTokens == 1)
+        // Cold loads can exceed the dictation timeout; the warm-up gets its own.
+        #expect(warm.timeout == Configuration.Cleanup().warmupTimeout)
+        // The cache-sharing contract: warm-up must render the exact system
+        // prompt and instruction prefix real requests use, or the prefill is
+        // wasted and every dictation pays it again.
+        _ = await service.clean("hello")
+        let real = engine.requests[1]
+        #expect(warm.system == real.system)
+        let sharedPrefix = CleanupService.wrapPrompt("x").components(separatedBy: "<<<")[0]
+        #expect(warm.prompt.hasPrefix(sharedPrefix))
+        #expect(real.prompt.hasPrefix(sharedPrefix))
     }
 
-    @Test func warmUpSkipsNetworkWhenDisabled() async {
-        // The 200 response would report success; disabled must not get there.
-        let service = makeService(FakeClient(result: .success((json("{}"), response(200)))), enabled: false)
+    @Test func warmUpSkipsEngineWhenDisabled() async {
+        let engine = FakeEngine(result: .success(generation("R")))
+        let service = makeService(engine, enabled: false)
+        #expect(await service.warmUp() == false)
+        #expect(engine.requests.isEmpty)
+    }
+
+    @Test func warmUpReportsFailureWhenEngineIsDown() async {
+        let service = makeService(FakeEngine(result: .failure(URLError(.cannotConnectToHost))))
         #expect(await service.warmUp() == false)
     }
 
-    @Test func warmUpReportsFailureWhenOllamaIsDown() async {
-        let service = makeService(FakeClient(result: .failure(URLError(.cannotConnectToHost))))
-        #expect(await service.warmUp() == false)
+    @Test func warmupAndCleanShareTheSameSystemPromptForAStyle() async {
+        let engine = FakeEngine(result: .success(generation("R")))
+        let service = makeService(engine)
+        service.dictionaryProvider = { ["Ziedo"] }
+
+        _ = await service.warmUp(style: .formal)
+        _ = await service.clean("hello", style: .formal)
+        #expect(engine.requests[0].system == engine.requests[1].system)
     }
 
-    // MARK: - timingSummary()
+    // MARK: - writing styles
 
-    @Test func timingSummaryRendersOllamaDurations() {
-        let data = json("""
-        {"response":"Hi.","total_duration":7020000000,"load_duration":5100000000,
-         "prompt_eval_count":1312,"prompt_eval_duration":1520000000,
-         "eval_count":24,"eval_duration":310000000}
-        """)
-        #expect(CleanupService.timingSummary(data: data)
-                == "total 7.02s: load 5.10s, prefill 1312tk 1.52s, generate 24tk 0.31s")
+    @Test func casualCleanCarriesCasualBlockAndDropsPunctuateOpener() async {
+        let engine = FakeEngine(result: .success(generation("Cleaned.")))
+        let service = makeService(engine)
+
+        _ = await service.clean("hey whats up", style: .casual)
+
+        let request = engine.requests[0]
+        #expect(request.system.contains("CASUAL CHAT"))
+        // The casual opener replaces "Punctuate and case", which would fight the
+        // lowercase counter-examples.
+        #expect(!request.prompt.contains("Punctuate and case"))
+        #expect(request.prompt.contains("casual chat style"))
     }
 
-    @Test func timingSummaryIsNilWithoutTimingFields() {
-        #expect(CleanupService.timingSummary(data: json(#"{"response":"Hi."}"#)) == nil)
-        #expect(CleanupService.timingSummary(data: json("nope")) == nil)
+    @Test func standardStyleCleanIsByteIdenticalToNoStyleCall() async {
+        let engine = FakeEngine(result: .success(generation("Cleaned.")))
+        let service = makeService(engine)
+        service.dictionaryProvider = { ["Ziedo"] }
+
+        _ = await service.clean("hello there")
+        _ = await service.clean("hello there", style: .standard)
+        #expect(engine.requests[0].system == engine.requests[1].system)
+        #expect(engine.requests[0].prompt == engine.requests[1].prompt)
+    }
+
+    // MARK: - predictive skip
+
+    @Test func throughputSampleComputesTokensPerSecond() {
+        let sample = CleanupService.throughputSample(timings: timings(tokens: 24, tokensPerSecond: 77.4))
+        #expect(abs((sample ?? 0) - 77.4) < 0.001)
+    }
+
+    @Test func throughputSampleIgnoresTinyGenerations() {
+        // A warm-up (1 token) or near-empty edit is too small to trust.
+        #expect(CleanupService.throughputSample(timings: timings(tokens: 1, tokensPerSecond: 200)) == nil)
+        #expect(CleanupService.throughputSample(timings: timings(tokens: 7, tokensPerSecond: 200)) == nil)
+    }
+
+    @Test func throughputSampleIsNilForDegenerateTimings() {
+        let zeroDuration = CleanupGeneration.Timings(
+            prefillTokens: 0, prefillSeconds: 0, generatedTokens: 50, generatedSeconds: 0)
+        #expect(CleanupService.throughputSample(timings: zeroDuration) == nil)
+    }
+
+    @Test func updatedThroughputSeedsThenBlends() {
+        // First sample seeds the average outright.
+        #expect(CleanupService.updatedThroughput(previous: nil, sample: 20) == 20)
+        // Later samples blend at alpha (0.3): 0.3*40 + 0.7*20 = 26.
+        #expect(CleanupService.updatedThroughput(previous: 20, sample: 40, alpha: 0.3) == 26)
+    }
+
+    @Test func estimatedOutputTokensIsInputLengthOverFour() {
+        #expect(CleanupService.estimatedOutputTokens(characterCount: 400) == 100)
+        #expect(CleanupService.estimatedOutputTokens(characterCount: 3) == 1)  // floor
+    }
+
+    @Test func predictedWaitDividesTokensByThroughput() {
+        // 400 chars → ~100 tokens; at 20 tok/s that's ~5s.
+        #expect(abs(CleanupService.predictedWait(characterCount: 400, throughput: 20) - 5) < 0.001)
+    }
+
+    @Test func cleanSkipsWhenPredictedWaitExceedsCapAndLogs() async {
+        var logged: [String] = []
+        // 16 tok/s: a slow engine whose first clean seeds the EWMA.
+        let engine = FakeEngine(result: .success(
+            generation("Cleaned.", timings: timings(tokens: 16, tokensPerSecond: 16))))
+        let service = makeService(engine, log: { logged.append($0) })
+
+        // First call measures throughput (~16 tok/s) and returns cleaned text.
+        let short = String(repeating: "a", count: 40)   // ~10 tokens → ~0.6s, under cap
+        #expect(await service.clean(short) == "Cleaned.")
+
+        // A long input now predicts well past the cap and is skipped up front.
+        let long = String(repeating: "a", count: 4_000)  // ~1000 tokens → ~62s
+        #expect(await service.clean(long) == long)
+        #expect(engine.requests.count == 1)   // the skip never reached the engine
+        #expect(logged.contains { $0.contains("cleanup skipped (predicted") && $0.contains("using raw text") })
+    }
+
+    @Test func cleanNeverSkipsWithoutAPriorObservation() async {
+        // Fresh install: no measured throughput, so even a huge input is tried.
+        let service = makeService(FakeEngine(result: .success(generation("Cleaned."))))
+        let long = String(repeating: "a", count: 10_000)
+        #expect(await service.clean(long) == "Cleaned.")
+    }
+
+    @Test func cleanDoesNotSkipWhenPredictionIsUnderCap() async {
+        // 200 tok/s: a fast engine whose predictions pass, so cleanup runs.
+        let engine = FakeEngine(result: .success(
+            generation("Cleaned.", timings: timings(tokens: 200, tokensPerSecond: 200))))
+        let service = makeService(engine)
+
+        #expect(await service.clean("first call measures throughput") == "Cleaned.")
+        // Even a long input predicts under 4s at 200 tok/s, so cleanup runs.
+        let long = String(repeating: "a", count: 2_000)  // ~500 tokens → 2.5s
+        #expect(await service.clean(long) == "Cleaned.")
+        #expect(engine.requests.count == 2)
+    }
+
+    @Test func observedThroughputPersistsAcrossInstancesSharingDefaults() async {
+        let defaults = UserDefaults(suiteName: "zwispTests-\(UUID().uuidString)")!
+        // 16 tok/s slow engine.
+        let slow = FakeEngine(result: .success(
+            generation("Cleaned.", timings: timings(tokens: 16, tokensPerSecond: 16))))
+        let first = CleanupService(config: Configuration.Cleanup(), engine: slow,
+                                   defaults: defaults, log: { _ in })
+        // Measure and persist the throughput.
+        _ = await first.clean("a call long enough to be a meaningful sample")
+
+        // A fresh service over the same defaults inherits the measurement and
+        // skips a long input immediately — proving the throughput persisted.
+        var logged: [String] = []
+        let untouched = FakeEngine(result: .success(generation("Cleaned.")))
+        let second = CleanupService(config: Configuration.Cleanup(), engine: untouched,
+                                    defaults: defaults, log: { logged.append($0) })
+        let long = String(repeating: "a", count: 4_000)
+        #expect(await second.clean(long) == long)
+        #expect(untouched.requests.isEmpty)
+        #expect(logged.contains { $0.contains("cleanup skipped") })
+    }
+
+    @Test func warmUpDoesNotSeedTheThroughputEWMA() async {
+        // A warm-up generates 1 token; its "throughput" must not seed the EWMA,
+        // or a later long input would be skipped on a bogus measurement.
+        let engine = FakeEngine(result: .success(
+            generation("R", timings: timings(tokens: 1, tokensPerSecond: 1))))
+        let service = makeService(engine)
+        #expect(await service.warmUp() == true)
+
+        engine.result = .success(generation("Cleaned."))
+        let long = String(repeating: "a", count: 8_000)
+        #expect(await service.clean(long) == "Cleaned.")
     }
 
     @Test func responseTokenBudgetScalesWithInputAndClamps() {
@@ -247,43 +334,28 @@ struct CleanupServiceTests {
             minResponseTokens: 100, maxResponseTokens: 2_048, responseTokenMultiplier: 2)
         let defaults = UserDefaults(suiteName: "zwispTests-\(UUID().uuidString)")!
         let service = CleanupService(
-            config: config, httpClient: FakeClient(result: .failure(URLError(.badURL))),
-            defaults: defaults)
+            config: config, engine: FakeEngine(result: .failure(URLError(.badURL))),
+            defaults: defaults, log: { _ in })
 
         #expect(service.responseTokenBudget(for: "short") == 100)                        // floor
         #expect(service.responseTokenBudget(for: String(repeating: "a", count: 300)) == 600)
         #expect(service.responseTokenBudget(for: String(repeating: "a", count: 5_000)) == 2_048) // cap
     }
 
-    // MARK: - model selection
+    // MARK: - CleanupGeneration.Timings
 
-    @Test func modelDefaultsToConfigAndPersistsUserChoice() {
-        let defaults = UserDefaults(suiteName: "zwispTests-\(UUID().uuidString)")!
-        let config = Configuration.Cleanup(model: "llama3.2:3b")
-        let client = FakeClient(result: .failure(URLError(.badURL)))
+    @Test func timingsLogSummaryRendersProseAndDraftStats() {
+        let withDraft = CleanupGeneration.Timings(
+            prefillTokens: 176, prefillSeconds: 1.72,
+            generatedTokens: 173, generatedSeconds: 4.65,
+            draftTokens: 216, draftAccepted: 134)
+        #expect(withDraft.logSummary
+                == "prefill 176tk 1.72s, generate 173tk 4.65s, draft 134/216 (62%)")
 
-        let service = CleanupService(config: config, httpClient: client, defaults: defaults)
-        #expect(service.model == "llama3.2:3b")
-
-        service.model = "qwen3:4b"
-        // A fresh service over the same defaults sees the persisted pick.
-        let reloaded = CleanupService(config: config, httpClient: client, defaults: defaults)
-        #expect(reloaded.model == "qwen3:4b")
-        // And the request uses it.
-        let body = reloaded.buildRequest(for: "hi").httpBody!
-        let object = try! JSONSerialization.jsonObject(with: body) as! [String: Any]
-        #expect(object["model"] as? String == "qwen3:4b")
-    }
-
-    @Test func parseModelListExtractsNames() {
-        let data = json(#"{"models":[{"name":"llama3.2:3b","size":1},{"name":"qwen3:4b"}]}"#)
-        #expect(CleanupService.parseModelList(data: data, response: response(200))
-                == ["llama3.2:3b", "qwen3:4b"])
-    }
-
-    @Test func parseModelListReturnsNilForNon200OrMalformed() {
-        #expect(CleanupService.parseModelList(data: json(#"{"models":[]}"#), response: response(500)) == nil)
-        #expect(CleanupService.parseModelList(data: json("nope"), response: response(200)) == nil)
+        let noDraft = CleanupGeneration.Timings(
+            prefillTokens: 996, prefillSeconds: 0.45,
+            generatedTokens: 1, generatedSeconds: 0)
+        #expect(noDraft.logSummary == "prefill 996tk 0.45s, generate 1tk 0.00s")
     }
 
     // MARK: - sanitize()
@@ -388,62 +460,6 @@ struct CleanupServiceTests {
         #expect(CleanupService.sanitize("\"Hello world.\"", raw: raw) == "\"Hello world.\"")
     }
 
-    // MARK: - wrapPrompt()
-
-    @Test func wrapPromptEmbedsTheTextBetweenDelimiters() {
-        let wrapped = CleanupService.wrapPrompt("what's the capital of france")
-        #expect(wrapped.contains("what's the capital of france"))
-        #expect(wrapped.contains("<<<"))
-        #expect(wrapped.contains(">>>"))
-        // It instructs the model to clean rather than answer.
-        #expect(wrapped.lowercased().contains("do not answer"))
-    }
-
-    // MARK: - writing styles
-
-    private func system(of request: URLRequest) throws -> String {
-        let body = try #require(request.httpBody)
-        let object = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
-        return try #require(object["system"] as? String)
-    }
-
-    private func prompt(of request: URLRequest) throws -> String {
-        let body = try #require(request.httpBody)
-        let object = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
-        return try #require(object["prompt"] as? String)
-    }
-
-    @Test func casualRequestCarriesCasualBlockAndDropsPunctuateOpener() throws {
-        let service = makeService(FakeClient(result: .failure(URLError(.badURL))))
-        let request = service.buildRequest(for: "hey whats up", style: .casual)
-
-        #expect(try system(of: request).contains("CASUAL CHAT"))
-        // The casual opener replaces "Punctuate and case", which would fight the
-        // lowercase counter-examples.
-        #expect(try !prompt(of: request).contains("Punctuate and case"))
-        #expect(try prompt(of: request).contains("casual chat style"))
-    }
-
-    @Test func standardStyleRequestIsByteIdenticalToNoStyleCall() throws {
-        let service = makeService(FakeClient(result: .failure(URLError(.badURL))))
-        service.dictionaryProvider = { ["Ziedo"] }
-
-        let noStyle = service.buildRequest(for: "hello there")
-        let standard = service.buildRequest(for: "hello there", style: .standard)
-        #expect(try system(of: standard) == system(of: noStyle))
-        #expect(try prompt(of: standard) == prompt(of: noStyle))
-    }
-
-    @Test func warmupAndCleanShareTheSameSystemPromptForAStyle() throws {
-        // The cache-sharing contract: warm-up must prefill the exact system
-        // prompt real requests use, per style, or the prefill is wasted.
-        let service = makeService(FakeClient(result: .failure(URLError(.badURL))))
-        service.dictionaryProvider = { ["Ziedo"] }
-
-        #expect(try system(of: service.buildWarmupRequest(style: .formal))
-                == system(of: service.buildRequest(for: "hello", style: .formal)))
-    }
-
     // MARK: - sanitize is style-safe
 
     @Test func sanitizePassesAllLowercaseCasualOutput() {
@@ -463,140 +479,14 @@ struct CleanupServiceTests {
         #expect(CleanupService.sanitize(formal, raw: raw) == formal)
     }
 
-    // MARK: - pullModel()
+    // MARK: - wrapPrompt()
 
-    /// A fake HTTP client that scripts a `/api/pull` line stream and records the
-    /// request, so pull behaviour is tested offline and deterministically. It
-    /// overrides `lines(for:)` (the streaming seam) directly rather than going
-    /// through the buffered default.
-    private final class StreamingFakeClient: HTTPClient, @unchecked Sendable {
-        let scriptedLines: [String]
-        let status: Int
-        let transportError: Error?
-        private(set) var capturedRequest: URLRequest?
-
-        init(scriptedLines: [String], status: Int = 200, transportError: Error? = nil) {
-            self.scriptedLines = scriptedLines
-            self.status = status
-            self.transportError = transportError
-        }
-
-        func data(for request: URLRequest) async throws -> (Data, URLResponse) {
-            // The pull path uses lines(for:), never this.
-            throw URLError(.unsupportedURL)
-        }
-
-        func lines(for request: URLRequest) async throws -> (AsyncThrowingStream<String, Error>, URLResponse) {
-            capturedRequest = request
-            if let transportError { throw transportError }
-            let response = HTTPURLResponse(
-                url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!
-            let lines = scriptedLines
-            let stream = AsyncThrowingStream<String, Error> { continuation in
-                for line in lines { continuation.yield(line) }
-                continuation.finish()
-            }
-            return (stream, response)
-        }
-    }
-
-    /// Collects `onProgress` callbacks, which fire from the streaming reader's
-    /// context (hence `@Sendable`), for assertions after the pull completes.
-    private final class ProgressRecorder: @unchecked Sendable {
-        private let lock = NSLock()
-        private var _fractions: [Double?] = []
-        var fractions: [Double?] { lock.lock(); defer { lock.unlock() }; return _fractions }
-        func record(_ fraction: Double?) {
-            lock.lock(); defer { lock.unlock() }
-            _fractions.append(fraction)
-        }
-    }
-
-    private let successLines = [
-        #"{"status":"pulling manifest"}"#,
-        #"{"status":"pulling a","digest":"a","total":100,"completed":50}"#,
-        #"{"status":"pulling a","digest":"a","total":100,"completed":100}"#,
-        #"{"status":"success"}"#,
-    ]
-
-    @Test func pullTargetsPullEndpointWithModelAndStreamBody() async throws {
-        let client = StreamingFakeClient(scriptedLines: successLines)
-        let service = makeService(client)
-
-        try await service.pullModel("qwen3:4b-instruct") { _, _ in }
-
-        let request = try #require(client.capturedRequest)
-        #expect(request.url == Configuration.Cleanup().pullEndpoint)
-        #expect(request.httpMethod == "POST")
-        let body = try #require(request.httpBody)
-        let object = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
-        #expect(object["model"] as? String == "qwen3:4b-instruct")
-        #expect(object["stream"] as? Bool == true)
-    }
-
-    @Test func pullReportsMonotonicProgressThenSucceeds() async throws {
-        let service = makeService(StreamingFakeClient(scriptedLines: successLines))
-        let recorder = ProgressRecorder()
-
-        try await service.pullModel("m") { _, fraction in recorder.record(fraction) }
-
-        // Manifest line has no totals (indeterminate), then 50% then 100%.
-        #expect(recorder.fractions == [nil, 0.5, 1.0])
-    }
-
-    @Test func pullThrowsOnErrorLine() async {
-        let lines = [
-            #"{"status":"pulling manifest"}"#,
-            #"{"error":"model \"nope\" not found"}"#,
-        ]
-        let service = makeService(StreamingFakeClient(scriptedLines: lines))
-        await #expect(throws: CleanupService.PullError.server(#"model "nope" not found"#)) {
-            try await service.pullModel("nope") { _, _ in }
-        }
-    }
-
-    @Test func pullThrowsBadStatusOnNon200() async {
-        let service = makeService(StreamingFakeClient(scriptedLines: [], status: 500))
-        await #expect(throws: CleanupService.PullError.badStatus(500)) {
-            try await service.pullModel("m") { _, _ in }
-        }
-    }
-
-    @Test func pullThrowsTruncatedWhenStreamEndsWithoutSuccess() async {
-        // The stream stops before "success" — a partial pull, not a completed one.
-        let lines = [
-            #"{"status":"pulling manifest"}"#,
-            #"{"status":"pulling a","digest":"a","total":100,"completed":50}"#,
-        ]
-        let service = makeService(StreamingFakeClient(scriptedLines: lines))
-        await #expect(throws: CleanupService.PullError.truncated) {
-            try await service.pullModel("m") { _, _ in }
-        }
-    }
-
-    @Test func pullThrowsUnreachableOnTransportError() async {
-        let service = makeService(StreamingFakeClient(
-            scriptedLines: [], transportError: URLError(.cannotConnectToHost)))
-        await #expect(throws: CleanupService.PullError.unreachable) {
-            try await service.pullModel("m") { _, _ in }
-        }
-    }
-
-    @Test func pullWorksThroughTheDefaultBufferedLinesImplementation() async throws {
-        // The existing buffered FakeClient has no lines() of its own; the
-        // protocol-extension default must split its body into lines so the pull
-        // still sees progress and success.
-        let body = successLines.joined(separator: "\n")
-        let service = makeService(FakeClient(result: .success((json(body), response(200)))))
-        let recorder = ProgressRecorder()
-
-        try await service.pullModel("m") { _, fraction in recorder.record(fraction) }
-        #expect(recorder.fractions == [nil, 0.5, 1.0])
-    }
-
-    @Test func pullEndpointPreservesCustomHostAndPort() {
-        let config = Configuration.Cleanup(
-            endpoint: URL(string: "http://192.168.1.5:9999/api/generate")!)
-        #expect(config.pullEndpoint == URL(string: "http://192.168.1.5:9999/api/pull")!)
+    @Test func wrapPromptEmbedsTheTextBetweenDelimiters() {
+        let wrapped = CleanupService.wrapPrompt("what's the capital of france")
+        #expect(wrapped.contains("what's the capital of france"))
+        #expect(wrapped.contains("<<<"))
+        #expect(wrapped.contains(">>>"))
+        // It instructs the model to clean rather than answer.
+        #expect(wrapped.lowercased().contains("do not answer"))
     }
 }

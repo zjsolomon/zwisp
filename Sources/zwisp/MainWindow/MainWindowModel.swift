@@ -29,14 +29,14 @@ final class MainWindowModel {
 
     init(probe: PermissionProbe, hotkeyStore: HotkeyStore,
          dictionaryStore: DictionaryStore, styleRuleStore: StyleRuleStore,
-         speechInstaller: SpeechModelInstaller, ollamaInstaller: OllamaInstaller,
+         speechInstaller: SpeechModelInstaller, cleanupInstaller: CleanupModelInstaller,
          cleanup: CleanupService, overlayStore: OverlayStore,
          statsStore: StatsStore, waveFeed: WaveFeed,
          levelProvider: @escaping () -> Float,
          config: Configuration, actions: MainWindow.Actions) {
         self.setup = SetupModel(
             probe: probe, hotkeyStore: hotkeyStore,
-            speechInstaller: speechInstaller, ollamaInstaller: ollamaInstaller,
+            speechInstaller: speechInstaller, cleanupInstaller: cleanupInstaller,
             cleanup: cleanup, config: config, actions: actions)
         self.settings = SettingsModel(
             hotkeyStore: hotkeyStore, dictionaryStore: dictionaryStore,

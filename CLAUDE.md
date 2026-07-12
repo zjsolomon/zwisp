@@ -7,8 +7,9 @@ Guidance for working in this repo. See `README.md` for the user-facing docs.
 zwisp is a **private, on-device push-to-talk dictation app for macOS** (menu-bar
 accessory app, no Dock icon; one dark-branded main window opened on demand). Hold a
 modifier key → record mic → release → WhisperKit transcribes locally → text is typed
-into the focused app. Optional local-LLM cleanup via Ollama. Nothing leaves the
-machine. Apple Silicon, macOS 14+, Swift 5.9+.
+into the focused app. Optional local-LLM cleanup via a **llama-server bundled inside
+the app** (a supervised localhost subprocess — no Ollama, nothing to install). Nothing
+leaves the machine. Apple Silicon, macOS 14+, Swift 5.9+.
 
 **Positioning (owner's intent):** a personal tool, published as a polished showcase —
 premium presentation matters, but the repo does not solicit issues/PRs and must never
@@ -19,7 +20,7 @@ read as a "portfolio piece" out loud. Keep README copy in a confident product vo
 ```bash
 swift test              # FAST: runs ZwispCore unit tests only (no WhisperKit/CoreML). Do this first.
 swift build             # Full app build; compiles WhisperKit — slow.
-./build-app.sh [release|debug]   # Builds + wraps binary in zwisp.app + code-signs it.
+./build-app.sh [release|debug]   # Builds + wraps binary in zwisp.app (incl. the pinned llama-server, fetched+cached) + code-signs it.
 ./install.sh            # build-app.sh release, then copies to /Applications and launches.
 ```
 
@@ -38,13 +39,16 @@ The codebase is deliberately split so pure logic is unit-tested without dragging
 WhisperKit/CoreML. **Keep this split when adding code.**
 
 - **`Sources/ZwispCore/`** — pure domain logic, *zero external dependencies*. Unit-tested.
-  Put testable logic here. Files: `Configuration.swift` (all tunable settings in one place),
+  Put testable logic here. Files: `Configuration.swift` (all tunable settings in one place,
+  incl. the bundled server's launch flags + the pinned cleanup-model file),
   `MenuBarState.swift`, `OnboardingState.swift` (permission checklist model + copy),
-  `SetupState.swift` (composes the permission checklist with the three `InstallPhase`s +
-  chain-button copy), `OllamaPull.swift` (tolerant `/api/pull` JSON-lines parser +
-  monotonic progress accumulator), `SpeechModelLayout.swift` (WhisperKit's on-disk model
+  `SetupState.swift` (composes the permission checklist with the two `InstallPhase`s +
+  download-button copy), `SpeechModelLayout.swift` (WhisperKit's on-disk model
   path + completeness check), `Hotkey.swift`, `HotkeyStore.swift`, `CleanupService.swift`
-  (Ollama cleanup; also the `pullModel` streaming seam), `DictionaryStore.swift` (personal
+  (cleanup prompts, budgets, guardrails, predictive skip), `CleanupEngine.swift` (the
+  serving seam: protocol + `CleanupGeneration` timings), `LlamaServerClient.swift`
+  (ChatML render + `/completion`//`/health` codec over the `HTTPClient` seam),
+  `DictionaryStore.swift` (personal
   dictionary persistence), `TranscriptCorrector.swift` (deterministic dictionary post-pass),
   `StreamingTranscript.swift` (streaming confirmation state machine), `AudioPadding.swift`,
   `TextInjector.swift`, `TranscriptFormatter.swift`, `WaveLevelMeter.swift` (deterministic
@@ -60,7 +64,9 @@ WhisperKit/CoreML. **Keep this split when adding code.**
   now takes a ready `modelFolder`, the installer owns the download), `StreamingWorker.swift`
   (eager transcription loop while the key is held), `PermissionProbe.swift` (live permission
   status + Settings deep links), `SpeechModelInstaller.swift` (downloads the WhisperKit model
-  with progress), `OllamaInstaller.swift` (installs Ollama + pulls the cleanup model),
+  with progress), `CleanupModelInstaller.swift` (downloads the pinned cleanup GGUF with
+  progress; size+SHA-256 verified), `LlamaServerSupervisor.swift` (spawns the bundled
+  llama-server, health-gates it, bounded restarts, teardown at quit),
   `SetupModel.swift`/`SettingsModel.swift` (the two `@Observable` view-model seams, kept from
   the old two-window layout), `MainWindow/` (the unified main window: `MainWindow.swift`
   window plumbing + merged frozen `Actions`, `MainWindowModel`/`MainView` sidebar navigation,
@@ -82,25 +88,23 @@ layer should stay a thin glue layer.
   all-encompassing, not just a permission checklist: it also **downloads the
   speech model with visible progress** (`SpeechModelInstaller` → `WhisperKit.download`, then
   `Transcriber(modelFolder:)` — the app no longer relies on WhisperKit's invisible first-use
-  fetch), and offers an **optional AI-cleanup chain** (`OllamaInstaller`): install Ollama from
-  the official signed zip (`ditto -xk`, then `codesign --verify --deep --strict` + bundle-ID
-  check *before* it's ever launched — never strip quarantine, never `spctl`), start its
-  server, and pull the recommended cleanup model via `/api/pull` streaming
-  (`CleanupService.pullModel` + core `OllamaPull`). **Ollama detection is
-  reachability-based**: a server answering `/api/tags` counts as installed even with no
-  `Ollama.app` anywhere (Homebrew CLI installs exist — `OllamaInstaller.refreshDetection`),
-  the setup row reads "Running"/"Not running" (`InstallPhase.serverStatusLine`), disk presence
-  (`serverToolOnDisk()`, app bundle OR CLI) only picks the server-down repair action
-  (start vs install), and the install chain never installs Ollama.app alongside a CLI copy.
-  **Auto-show gate = hotkey permissions
+  fetch), and offers the **optional cleanup-model download** (`CleanupModelInstaller`): one
+  pinned GGUF (`Configuration.Cleanup.ModelFile` — name, URL, SHA-256, exact byte size) into
+  `~/Library/Application Support/zwisp/models/`, verified before it's ever served; a
+  wrong-size file reads as missing and re-downloads. The engine itself ships inside the
+  bundle (`Contents/Resources/llama/llama-server`, fetched + signed by `build-app.sh` from a
+  pinned llama.cpp release) — `LlamaServerSupervisor` starts it when the model is on disk,
+  health-gates it, restarts it (bounded) if it dies, slides to a neighbouring port if the
+  configured one is squatted (the shared `LlamaServerAddress` keeps the client in step), and
+  tears it down in `applicationWillTerminate`. **Auto-show gate = hotkey permissions
   missing OR the speech model isn't on disk** (`permissions.needsSetup ||
   speechInstaller.installedFolder() == nil` → `mainWindow.present(section: .setup)`);
-  Ollama/cleanup missing alone **never** auto-shows
+  the cleanup model missing alone **never** auto-shows
   (it's optional — don't nag about a multi-GB download). The same gate drives the sidebar's
   orange Setup badge (`MainNav.setupNeedsAttention`, core, tested). Live status checks +
   deep links live
   in `PermissionProbe.swift`; the pure checklist model (`OnboardingState`, row copy,
-  `needsSetup`) plus `SetupState`/`InstallPhase`/`SpeechModelLayout`/`OllamaPull` live in core
+  `needsSetup`) plus `SetupState`/`InstallPhase`/`SpeechModelLayout` live in core
   with tests. `AppDelegate` is `@MainActor` (it owns the main-actor installers + main window).
 - **Only modifier keys** (⌘ ⌥ ⌃ ⇧ Fn) can be hotkeys — held while talking, don't auto-repeat.
   Left/right modifiers are distinct. Default is Right ⌘ (`HotkeyStore.defaultHotkeys`).
@@ -118,20 +122,28 @@ layer should stay a thin glue layer.
   **strictly serial and in order** (chained through `pipelineTail`) and each remembers the
   frontmost app's PID at record time — if focus moved, the result is dropped, not typed into the
   wrong app. Don't make injection fire synchronously on release.
-- Ollama cleanup is **on by default but fail-safe**: enabled unless the user turns it off
-  (`CleanupService.enabled`, persisted), with *two* fallbacks to the raw transcript — Ollama
-  unreachable/errors, and output that fails the guardrails in `CleanupService.sanitize` (the
-  conservation rule: a cleanup that drops too many of the speaker's words is discarded). Keep both
-  fallbacks intact — dictation must always work. The cleanup model is user-selectable from the menu
-  (`availableModels()` lists what Ollama has); the pick is persisted and overrides the config default.
-  `CleanupService.status()` (off/unavailable/active) drives the menu-bar colour via `MenuBarState`
-  (red = model loading, green = ready raw-only, blue = ready + cleanup); `AppDelegate` re-checks it
-  on toggle/model change, after each dictation, and on a 30 s poll. **Cleanup is kept warm**: the
-  cold start (model load + prefill of the long system prompt) costs seconds and can blow the 8 s
-  timeout, so `keep_alive` is negative (never unload) and `AppDelegate` fires
-  `CleanupService.warmUp()` whenever status transitions to active. Per-stage timings go to
-  `~/Library/Logs/zwisp.log` (transcribe/cleanup seconds, plus Ollama's load/prefill/generate
-  breakdown) — check there first when dictation "feels slow".
+- Cleanup is **on by default but fail-safe**: enabled unless the user turns it off
+  (`CleanupService.enabled`, persisted), with *three* fallbacks to the raw transcript — engine
+  unreachable/errors, output that fails the guardrails in `CleanupService.sanitize` (the
+  conservation rule: a cleanup that drops too many of the speaker's words is discarded), and the
+  **predictive skip** (an EWMA of measured generation tok/s predicts each input's wait; past
+  `Configuration.Cleanup.maxPredictedWait` the raw text is typed immediately instead of paying a
+  doomed round trip — the EWMA persists under an engine-suffixed defaults key so an engine swap
+  can't skip on stale numbers). Keep all fallbacks intact — dictation must always work. There is
+  ONE model, pinned (`ModelFile.displayName` is what the UI shows); no picker.
+  `CleanupService.status()` (off/unavailable/active) is a `/health` probe and drives the menu-bar
+  colour via `MenuBarState` (red = model loading, green = ready raw-only, blue = ready + cleanup);
+  `AppDelegate` re-checks it on toggle, after each dictation, on supervisor state changes, and on
+  a 30 s poll. **The server generates with n-gram speculative decoding**
+  (`--spec-type ngram-simple`, sizes in `Configuration.Cleanup.Server`, benchmark-tuned 2026-07):
+  cleanup output mostly copies the transcript already in the prompt, so drafts come straight from
+  it — 2.4–2.8× faster end-to-end, byte-identical output at near-greedy temperature. Don't
+  "simplify" the flags away. **Cleanup is kept warm**: the resident server never unloads the
+  model, and `AppDelegate` fires `CleanupService.warmUp()` (1-token generate, prefills the system
+  prompt into the slot's KV cache; `cache_prompt: true` + `--cache-reuse` make it stick) whenever
+  status transitions to active. Per-stage timings go to `~/Library/Logs/zwisp.log`
+  (transcribe/cleanup seconds, plus the engine's prefill/generate/draft-acceptance breakdown) —
+  check there first when dictation "feels slow".
 - **Personal dictionary lives in the cleanup *system* prompt** (rendered by
   `Configuration.Cleanup.systemPrompt(base:dictionary:style:)`) so `warmUp(style:)` prefills it
   once — and any dictionary *or writing-style* change invalidates that KV cache, so `AppDelegate`
@@ -151,7 +163,7 @@ layer should stay a thin glue layer.
   claimed most ⌃⌥⌘ shortcut combos, and Services can't tell left/right modifiers apart).
 - **Per-app writing styles** steer cleanup into `.standard`/`.formal`/`.casual` per frontmost app.
   All steering is in the cleanup *system* prompt: the style `promptBlock` is appended **LAST**
-  (after the base prompt and the dictionary block) so Ollama's longest-common-prefix KV reuse
+  (after the base prompt and the dictionary block) so the server's longest-common-prefix KV reuse
   reprefills only the short style suffix on a switch — keep that ordering in
   `Configuration.Cleanup.systemPrompt`. Style is `WritingStyle` + `StyleRuleStore`/`StyleResolver`
   (core, tested); rules match on bundle ID plus an optional window-title substring (a title rule
@@ -182,8 +194,9 @@ layer should stay a thin glue layer.
   from the menu-bar "Open zwisp…" (⌘,) or by re-launching the app
   (`applicationShouldHandleReopen`). **The menu bar is deliberately tiny** (cleanup toggle,
   quick dictionary add, Launch at Login, Quit) — `menuWillOpen` re-syncs the two stateful
-  items; the old three-submenu rebuild machinery is gone, and the "Ollama isn't running" rescue
-  lives in the Setup/AI Cleanup sections (`cleanupActionIsStartOnly`).
+  items; the old three-submenu rebuild machinery is gone. The engine has no user-facing
+  "start" action: the supervisor owns its lifecycle, and a dead engine just reads
+  green/unavailable until it's back.
 - **Home dashboard**: `HomeModel` (stats + hotkey names), `HomeWaveView` (the big equalizer —
   its own `WaveLevelMeter` on the larger `Configuration.homeWave` grid, driven by a
   `TimelineView` reading `AudioRecorder.currentLevel()`; suspended automatically when not on

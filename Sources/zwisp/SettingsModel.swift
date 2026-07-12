@@ -30,17 +30,15 @@ final class SettingsModel {
     private(set) var rules: [AppStyleRule] = []
     private(set) var defaultStyle: WritingStyle = .standard
     private(set) var cleanupEnabled: Bool = false
-    private(set) var cleanupModel: String = ""
+    /// The one bundled cleanup model's display name (static — no picker).
+    private(set) var cleanupModelName: String = ""
     private(set) var whisperModel: String = ""
     private(set) var launchAtLogin: Bool = false
     private(set) var overlayEnabled: Bool = false
 
     // MARK: - Async-loaded
 
-    /// Models Ollama reports as installed. `nil` while loading, or when Ollama
-    /// is unreachable — the picker uses this to show a spinner / fall back.
-    private(set) var availableModels: [String]?
-    /// Human-readable cleanup status line, e.g. "Active — llama3.2".
+    /// Human-readable cleanup status line, e.g. "Active — Qwen3 4B".
     private(set) var cleanupStatusLine: String = ""
 
     init(hotkeyStore: HotkeyStore, dictionaryStore: DictionaryStore,
@@ -72,18 +70,15 @@ final class SettingsModel {
         rules = styleRuleStore.rules
         defaultStyle = styleRuleStore.defaultStyle
         cleanupEnabled = cleanup.enabled
-        cleanupModel = cleanup.model
+        cleanupModelName = cleanup.modelName
         whisperModel = config.whisperModel
         launchAtLogin = (SMAppService.mainApp.status == .enabled)
         overlayEnabled = overlayStore.enabled
     }
 
     private func reloadCleanupStatus() {
-        availableModels = nil
         Task { @MainActor in
-            let models = await cleanup.availableModels()
             let status = await cleanup.status()
-            self.availableModels = models
             self.cleanupStatusLine = Self.describe(status)
         }
     }
@@ -91,7 +86,7 @@ final class SettingsModel {
     private static func describe(_ status: CleanupStatus) -> String {
         switch status {
         case .active(let model): return "Active — \(model)"
-        case .unavailable: return "Ollama not reachable"
+        case .unavailable: return "Cleanup engine isn't running"
         case .off: return "Cleanup is off"
         }
     }
@@ -116,12 +111,6 @@ final class SettingsModel {
 
     func setCleanupEnabled(_ enabled: Bool) {
         cleanup.enabled = enabled
-        actions.cleanupSettingChanged()
-        refresh()
-    }
-
-    func setCleanupModel(_ model: String) {
-        cleanup.model = model
         actions.cleanupSettingChanged()
         refresh()
     }

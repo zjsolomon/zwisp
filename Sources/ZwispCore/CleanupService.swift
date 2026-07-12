@@ -1,85 +1,35 @@
 import Foundation
 
-/// Minimal seam over `URLSession` so `CleanupService` can be tested against a
-/// fake server (offline, deterministic) without hitting the network.
+/// Minimal seam over `URLSession` so `LlamaServerClient` (and anything else
+/// that talks HTTP) can be tested against a fake server — offline and
+/// deterministic, without hitting the network.
 public protocol HTTPClient {
     func data(for request: URLRequest) async throws -> (Data, URLResponse)
-    /// Streams a response body line by line — needed for Ollama's `/api/pull`,
-    /// which reports download progress as newline-delimited JSON that only
-    /// makes sense as it arrives, not buffered whole at the end.
-    func lines(for request: URLRequest) async throws -> (AsyncThrowingStream<String, Error>, URLResponse)
 }
 
-public extension HTTPClient {
-    /// Default `lines`: buffer the whole body via `data(for:)`, then replay it
-    /// split on newlines. Correct (if not truly incremental) for any client —
-    /// so a test's buffered `FakeClient` gets `lines` for free and keeps
-    /// compiling unchanged. `URLSession` overrides this with real streaming.
-    func lines(for request: URLRequest) async throws -> (AsyncThrowingStream<String, Error>, URLResponse) {
-        let (data, response) = try await data(for: request)
-        let body = String(decoding: data, as: UTF8.self)
-        let stream = AsyncThrowingStream<String, Error> { continuation in
-            for line in body.split(whereSeparator: \.isNewline) {
-                continuation.yield(String(line))
-            }
-            continuation.finish()
-        }
-        return (stream, response)
-    }
-}
-
-extension URLSession: HTTPClient {
-    /// True streaming: `bytes(for:).lines` yields each line as it comes off the
-    /// socket, so `/api/pull` progress is live rather than delivered all at
-    /// once when the multi-gigabyte download finishes. The reader runs in a
-    /// child `Task` bridged into an `AsyncThrowingStream`; `onTermination`
-    /// cancels it if the consumer stops early, so a cancelled pull doesn't
-    /// leave a socket read dangling.
-    public func lines(for request: URLRequest) async throws -> (AsyncThrowingStream<String, Error>, URLResponse) {
-        let (bytes, response) = try await self.bytes(for: request)
-        let stream = AsyncThrowingStream<String, Error> { continuation in
-            let task = Task {
-                do {
-                    for try await line in bytes.lines {
-                        continuation.yield(line)
-                    }
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: error)
-                }
-            }
-            continuation.onTermination = { _ in task.cancel() }
-        }
-        return (stream, response)
-    }
-}
+extension URLSession: HTTPClient {}
 
 /// Where the cleanup pass currently stands — drives the menu-bar colour
 /// (blue when cleanup will actually run, green when dictation is raw-only).
 public enum CleanupStatus: Equatable {
-    case active(model: String)  // enabled, Ollama reachable, selected model installed
-    case unavailable            // enabled, but Ollama is down or the model is missing
+    case active(model: String)  // enabled, and the bundled engine answers /health
+    case unavailable            // enabled, but the engine isn't up (model not downloaded, server down)
     case off                    // user turned cleanup off
 }
 
 /// Optional LLM "cleanup" pass that turns a raw speech transcript into clean
 /// written text (punctuation, capitalization, removing filler words and false
-/// starts). Runs fully locally against an Ollama server on localhost.
+/// starts). Runs fully locally against the `CleanupEngine` it's given — in
+/// production the llama-server bundled inside zwisp.app.
 ///
-/// If Ollama isn't installed/running, `clean` simply returns the original text,
-/// so dictation always works. The same fallback applies when the model's output
+/// If the engine isn't ready, `clean` simply returns the original text, so
+/// dictation always works. The same fallback applies when the model's output
 /// fails the sanity checks in `sanitize` — a bad cleanup must never replace a
 /// good transcript.
 public final class CleanupService {
     /// User-toggleable from the menu; persisted in UserDefaults.
     public var enabled: Bool {
         didSet { defaults.set(enabled, forKey: Self.enabledKey) }
-    }
-
-    /// The Ollama model used for cleanup. Defaults to the configured model;
-    /// user picks from the menu are persisted and override it.
-    public var model: String {
-        didSet { defaults.set(model, forKey: Self.modelKey) }
     }
 
     /// Supplies the personal dictionary rendered into the system prompt (see
@@ -91,7 +41,7 @@ public final class CleanupService {
     public var dictionaryProvider: () -> [String] = { [] }
 
     private let config: Configuration.Cleanup
-    private let httpClient: HTTPClient
+    private let engine: CleanupEngine
     private let defaults: UserDefaults
     /// Injectable so unit tests don't append to the real ~/Library/Logs file —
     /// it doubles as the dictation-latency diagnostic, so stray test lines
@@ -99,19 +49,45 @@ public final class CleanupService {
     private let log: (String) -> Void
 
     static let enabledKey = "cleanupEnabled"
-    static let modelKey = "cleanupModel"
+    /// Suffixed with the engine name on purpose: a throughput measured against
+    /// the old Ollama era must not survive an engine swap, or the first
+    /// post-swap dictation would be skipped on a bogus (slow) prediction.
+    static let throughputKey = "cleanupObservedThroughputTokPerSec.llamaserver"
 
-    /// Production initializer: talks to the real Ollama server via `URLSession`.
-    public convenience init(config: Configuration.Cleanup = Configuration.Cleanup()) {
-        self.init(config: config, httpClient: URLSession.shared, defaults: .standard)
+    /// EWMA of the engine's observed generation throughput (tokens/sec),
+    /// measured from each successful `clean` and persisted so the first
+    /// dictation after relaunch already predicts accurately. `nil` on a fresh
+    /// install (no observation yet) — the predictive skip never fires until
+    /// there's a measurement, so cleanup is always attempted at least once.
+    private var observedThroughput: Double? {
+        get {
+            guard defaults.object(forKey: Self.throughputKey) != nil else { return nil }
+            let value = defaults.double(forKey: Self.throughputKey)
+            return value > 0 ? value : nil
+        }
+        set {
+            if let newValue {
+                defaults.set(newValue, forKey: Self.throughputKey)
+            } else {
+                defaults.removeObject(forKey: Self.throughputKey)
+            }
+        }
     }
 
-    /// Testable initializer: inject a fake `HTTPClient` and an isolated
+    /// Production initializer: the bundled llama-server over localhost.
+    public convenience init(config: Configuration.Cleanup = Configuration.Cleanup()) {
+        self.init(config: config, engine: LlamaServerClient(config: config),
+                  defaults: .standard)
+    }
+
+    /// Seam initializer: inject the engine used by production wiring (a
+    /// port-following `LlamaServerClient`) or a test fake, plus an isolated
     /// `UserDefaults` suite.
-    init(config: Configuration.Cleanup, httpClient: HTTPClient, defaults: UserDefaults,
-         log: @escaping (String) -> Void = Log.write) {
+    public init(config: Configuration.Cleanup, engine: CleanupEngine,
+                defaults: UserDefaults = .standard,
+                log: @escaping (String) -> Void = Log.write) {
         self.config = config
-        self.httpClient = httpClient
+        self.engine = engine
         self.defaults = defaults
         self.log = log
         // Default ON; respect a previously saved choice.
@@ -120,20 +96,49 @@ public final class CleanupService {
         } else {
             self.enabled = defaults.bool(forKey: Self.enabledKey)
         }
-        self.model = defaults.string(forKey: Self.modelKey) ?? config.model
     }
 
+    /// What the UI calls the (one, bundled) cleanup model.
+    public var modelName: String { config.modelFile.displayName }
+
     /// Returns cleaned text, or the original `text` unchanged if cleanup is
-    /// disabled, the input is empty, or Ollama is unavailable/unhelpful.
+    /// disabled, the input is empty, the engine is unavailable/unhelpful, or
+    /// the predicted wait is hopeless.
     public func clean(_ text: String, style: WritingStyle = .standard) async -> String {
         guard enabled, !text.isEmpty else { return text }
-        do {
-            let (data, response) = try await httpClient.data(for: buildRequest(for: text, style: style))
-            if let timings = Self.timingSummary(data: data) {
-                log("cleanup \(timings)")
+        // Predictive skip: once we've measured how fast this engine generates,
+        // estimate the wait for this input and bail to the raw transcript up
+        // front if it can't plausibly finish inside `maxPredictedWait`. Without
+        // this, a long dictation on a slow engine waits the full `timeout` only
+        // to fall back to raw anyway — max latency, zero benefit. No measurement
+        // yet (fresh install) → never skip, so cleanup is always tried once.
+        if let throughput = observedThroughput {
+            let predicted = Self.predictedWait(characterCount: text.count, throughput: throughput)
+            if predicted > config.maxPredictedWait {
+                log(String(format: "cleanup skipped (predicted %.1fs > %.0fs cap); using raw text",
+                           predicted, config.maxPredictedWait))
+                return text
             }
-            guard let parsed = Self.parse(data: data, response: response) else { return text }
-            guard let cleaned = Self.sanitize(parsed, raw: text) else {
+        }
+        do {
+            let generation = try await engine.generate(
+                system: renderedSystemPrompt(style: style),
+                prompt: Self.wrapPrompt(text, style: style),
+                maxTokens: responseTokenBudget(for: text),
+                timeout: config.timeout)
+            if let timings = generation.timings {
+                log("cleanup \(timings.logSummary)")
+                // Feed the measured throughput back into the EWMA so predictions
+                // track the engine. Tiny generations are ignored (see
+                // `throughputSample`), so warm-ups and near-empty edits don't skew it.
+                if let sample = Self.throughputSample(timings: timings) {
+                    observedThroughput = Self.updatedThroughput(previous: observedThroughput,
+                                                                sample: sample)
+                }
+            }
+            let output = generation.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !output.isEmpty else { return text }
+            guard let cleaned = Self.sanitize(output, raw: text) else {
                 log("cleanup output failed sanity checks; using raw text")
                 return text
             }
@@ -144,174 +149,48 @@ public final class CleanupService {
         }
     }
 
-    /// Pays the cleanup cold start deliberately, ahead of any dictation: loads
-    /// the model into Ollama's memory and computes the KV cache for the long,
-    /// request-invariant system prompt. Without this, the first cleanup after
-    /// launch or a model change costs several seconds — enough to blow
-    /// `clean`'s timeout and silently degrade to the raw transcript. Returns
-    /// whether the model is now warm.
+    /// Pays the cleanup cold start deliberately, ahead of any dictation: makes
+    /// the engine compute the KV cache for the long, request-invariant system
+    /// prompt (the resident server never unloads the model, so the prefill is
+    /// the whole cost). Without this, the first cleanup after launch or a
+    /// prompt change pays the prefill inside its timeout budget. Returns
+    /// whether the engine answered.
     @discardableResult
     public func warmUp(style: WritingStyle = .standard) async -> Bool {
         guard enabled else { return false }
         let start = Date()
-        guard let (data, response) = try? await httpClient.data(for: buildWarmupRequest(style: style)),
-              (response as? HTTPURLResponse)?.statusCode == 200
+        guard let generation = try? await engine.generate(
+            system: renderedSystemPrompt(style: style),
+            // Through `wrapPrompt` like a real dictation, so the rendered
+            // prompt shares its whole instruction prefix with real requests
+            // and the KV cache carries over.
+            prompt: Self.wrapPrompt("Ready.", style: style),
+            maxTokens: 1,
+            timeout: config.warmupTimeout)
         else {
             log("cleanup warm-up failed; the next dictation may pay the cold start")
             return false
         }
         let elapsed = Date().timeIntervalSince(start)
-        let detail = Self.timingSummary(data: data).map { " (\($0))" } ?? ""
+        let detail = generation.timings.map { " (\($0.logSummary))" } ?? ""
         log(String(format: "cleanup model warmed in %.2fs%@", elapsed, detail))
         return true
     }
 
     /// Derives the current `CleanupStatus`. `.off` is decided without touching
-    /// the network; otherwise one cheap `/api/tags` call to localhost settles
+    /// the engine; otherwise one cheap localhost health probe settles
     /// `.active` vs `.unavailable`.
     public func status() async -> CleanupStatus {
         guard enabled else { return .off }
-        guard let models = await availableModels(), models.contains(model) else {
-            return .unavailable
-        }
-        return .active(model: model)
+        return await engine.isReady() ? .active(model: modelName) : .unavailable
     }
 
-    /// Asks Ollama which models are installed (`/api/tags`), for the model
-    /// picker in the menu. Returns `nil` when Ollama isn't reachable.
-    public func availableModels() async -> [String]? {
-        var request = URLRequest(url: config.tagsEndpoint)
-        request.timeoutInterval = 3
-        guard let (data, response) = try? await httpClient.data(for: request) else { return nil }
-        return Self.parseModelList(data: data, response: response)
-    }
-
-    // MARK: - Model pull
-
-    /// Why a `pullModel` attempt failed. Distinguished so the setup UI can tell
-    /// "Ollama isn't running" (retryable once it's up) from "the server said
-    /// no" (surface the message).
-    public enum PullError: Error, Equatable {
-        /// Couldn't reach Ollama at all (server down, connection dropped).
-        case unreachable
-        /// Reached it, but got a non-200 (e.g. a malformed request).
-        case badStatus(Int)
-        /// The pull stream reported an explicit error line.
-        case server(String)
-        /// The stream ended without ever reporting success — a partial pull.
-        case truncated
-    }
-
-    /// Streams a model download from Ollama's `/api/pull`, reporting progress as
-    /// it goes. Folds the newline-delimited JSON through `OllamaPullProgress`
-    /// and returns once the server reports success; throws `PullError` on an
-    /// error line, a non-200, a truncated stream, or an unreachable server.
-    ///
-    /// `onProgress` is `@Sendable` because it's called from the streaming
-    /// reader task (off the caller's context) — the app hops it to the main
-    /// actor. Progress is best-effort; only the terminal outcome is throwing.
-    public func pullModel(
-        _ name: String,
-        onProgress: @escaping @Sendable (_ stage: String, _ fraction: Double?) -> Void
-    ) async throws {
-        var request = URLRequest(url: config.pullEndpoint)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        // For a streaming body, `timeoutInterval` behaves as an *idle* timeout:
-        // it resets every time a chunk arrives, so a healthy multi-gigabyte
-        // pull won't trip it — only a genuine 60 s stall (server hung mid-pull)
-        // does, which is exactly when we want to give up and let the user retry.
-        request.timeoutInterval = 60
-        request.httpBody = try? JSONSerialization.data(
-            withJSONObject: ["model": name, "stream": true])
-
-        let stream: AsyncThrowingStream<String, Error>
-        let response: URLResponse
-        do {
-            (stream, response) = try await httpClient.lines(for: request)
-        } catch {
-            throw PullError.unreachable
-        }
-
-        guard let http = response as? HTTPURLResponse else { throw PullError.unreachable }
-        guard http.statusCode == 200 else { throw PullError.badStatus(http.statusCode) }
-
-        var progress = OllamaPullProgress()
-        var succeeded = false
-        do {
-            for try await line in stream {
-                guard let event = OllamaPullEvent.parse(line: line) else { continue }
-                switch progress.apply(event) {
-                case .progress(let stage, let fraction):
-                    onProgress(stage, fraction)
-                case .success:
-                    succeeded = true
-                case .failure(let message):
-                    throw PullError.server(message)
-                }
-            }
-        } catch let error as PullError {
-            throw error
-        } catch {
-            // The stream itself faulted (socket dropped mid-pull).
-            throw PullError.unreachable
-        }
-
-        guard succeeded else { throw PullError.truncated }
-    }
-
-    /// Builds the Ollama `/api/generate` request for `text`. Internal so tests
-    /// can assert the body without sending it.
-    func buildRequest(for text: String, style: WritingStyle = .standard) -> URLRequest {
-        makeGenerateRequest(
-            prompt: Self.wrapPrompt(text, style: style),
-            // Cleanup output is about the size of its input; a hard token
-            // budget cuts off a runaway generation at the source.
-            numPredict: responseTokenBudget(for: text),
-            timeout: config.timeout,
-            style: style)
-    }
-
-    /// The warm-up request: a one-token generation whose only purpose is its
-    /// side effects (model load + system-prompt prefill). It goes through
-    /// `wrapPrompt` like a real dictation so the rendered prompt shares its
-    /// whole instruction prefix with real requests and the KV cache carries
-    /// over. Generous timeout — a cold load may exceed `config.timeout`.
-    func buildWarmupRequest(style: WritingStyle = .standard) -> URLRequest {
-        makeGenerateRequest(
-            prompt: Self.wrapPrompt("Ready.", style: style),
-            numPredict: 1,
-            timeout: config.warmupTimeout,
-            style: style)
-    }
-
-    private func makeGenerateRequest(prompt: String, numPredict: Int,
-                                     timeout: TimeInterval,
-                                     style: WritingStyle = .standard) -> URLRequest {
-        var request = URLRequest(url: config.endpoint)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = timeout
-
-        let body: [String: Any] = [
-            "model": model,
-            "system": Configuration.Cleanup.systemPrompt(base: config.systemPrompt,
-                                                         dictionary: dictionaryProvider(),
-                                                         style: style),
-            "prompt": prompt,
-            "stream": false,
-            // Reasoning models (qwen3, deepseek-r1, …) would otherwise think
-            // out loud for seconds before — or instead of — cleaning the text.
-            "think": false,
-            // Keep the model warm so the next dictation skips the load penalty.
-            "keep_alive": config.keepAlive,
-            "options": [
-                "temperature": config.temperature,
-                "num_predict": numPredict
-            ]
-        ]
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        return request
+    /// The system prompt actually sent: base + dictionary + style, in the
+    /// KV-cache-friendly order `Configuration.Cleanup.systemPrompt` guarantees.
+    private func renderedSystemPrompt(style: WritingStyle) -> String {
+        Configuration.Cleanup.systemPrompt(base: config.systemPrompt,
+                                           dictionary: dictionaryProvider(),
+                                           style: style)
     }
 
     /// `input length × multiplier`, clamped — see `Configuration.Cleanup`.
@@ -351,52 +230,42 @@ public final class CleanupService {
         """
     }
 
-    /// Extracts the cleaned string from an Ollama response, or `nil` if the
-    /// response isn't a usable 200 with non-empty `response` text (caller then
-    /// falls back to the raw transcript).
-    static func parse(data: Data, response: URLResponse) -> String? {
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200,
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let cleaned = (object["response"] as? String)?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-              !cleaned.isEmpty
-        else {
-            return nil
-        }
-        return cleaned
+    // MARK: - Predictive skip
+
+    /// Below this many generated tokens, a response is too small to be a
+    /// reliable throughput sample — a near-empty edit, or a warm-up's single
+    /// token — so it never updates the EWMA.
+    static let minMeaningfulTokens = 8
+
+    /// Observed generation throughput (tokens/sec) from a response's timing
+    /// report, or `nil` when the generation was too small
+    /// (`generatedTokens < minMeaningfulTokens`) to trust.
+    static func throughputSample(timings: CleanupGeneration.Timings) -> Double? {
+        guard timings.generatedTokens >= minMeaningfulTokens else { return nil }
+        return timings.tokensPerSecond
     }
 
-    /// Compact rendering of the timing fields Ollama attaches to every
-    /// generate response (nanosecond integers), or `nil` when absent. Splits a
-    /// slow cleanup into its actual causes — model load vs prompt prefill vs
-    /// token generation — so "cleanup is slow" is diagnosable from the log.
-    static func timingSummary(data: Data) -> String? {
-        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let total = (object["total_duration"] as? NSNumber)?.doubleValue
-        else { return nil }
-        func seconds(_ key: String) -> Double {
-            ((object[key] as? NSNumber)?.doubleValue ?? 0) / 1e9
-        }
-        func tokens(_ key: String) -> Int {
-            (object[key] as? NSNumber)?.intValue ?? 0
-        }
-        return String(
-            format: "total %.2fs: load %.2fs, prefill %dtk %.2fs, generate %dtk %.2fs",
-            total / 1e9,
-            seconds("load_duration"),
-            tokens("prompt_eval_count"), seconds("prompt_eval_duration"),
-            tokens("eval_count"), seconds("eval_duration"))
+    /// Exponentially-weighted moving average of observed throughput. The first
+    /// sample seeds the average; later samples blend in at `alpha` so the
+    /// prediction tracks the engine without lurching on a single outlier.
+    static func updatedThroughput(previous: Double?, sample: Double, alpha: Double = 0.3) -> Double {
+        guard let previous else { return sample }
+        return alpha * sample + (1 - alpha) * previous
     }
 
-    /// Extracts installed model names from an Ollama `/api/tags` response.
-    static func parseModelList(data: Data, response: URLResponse) -> [String]? {
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200,
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let models = object["models"] as? [[String: Any]]
-        else {
-            return nil
-        }
-        return models.compactMap { $0["name"] as? String }
+    /// Estimated tokens cleanup will generate for a `characterCount`-long input.
+    /// Cleanup output is about the size of its input and tokens average ~4
+    /// characters, so `characterCount / 4` is a serviceable estimate (floored
+    /// at 1 so a tiny input never predicts zero work).
+    static func estimatedOutputTokens(characterCount: Int) -> Int {
+        max(characterCount / 4, 1)
+    }
+
+    /// Predicted seconds to generate cleanup output for a `characterCount`-long
+    /// input at `throughput` tokens/sec.
+    static func predictedWait(characterCount: Int, throughput: Double) -> Double {
+        guard throughput > 0 else { return .infinity }
+        return Double(estimatedOutputTokens(characterCount: characterCount)) / throughput
     }
 
     // MARK: - Output guardrails
@@ -480,8 +349,8 @@ public final class CleanupService {
         )
     }
 
-    /// Removes `<think>…</think>` reasoning blocks. `think: false` in the
-    /// request should prevent them, but not every model honours it. An opened
+    /// Removes `<think>…</think>` reasoning blocks. The instruct model
+    /// shouldn't produce them, but the strip is cheap insurance. An opened
     /// but unclosed block means the whole output is chain-of-thought (the token
     /// budget cut it off mid-think) — treat that as unusable.
     static func stripThinkBlocks(from text: String) -> String {

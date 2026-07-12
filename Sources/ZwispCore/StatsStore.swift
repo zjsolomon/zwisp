@@ -7,7 +7,7 @@ import Foundation
 /// each dictation is folded immediately into a per-day and a lifetime aggregate,
 /// so the file's size is bounded by the retention window, not by usage.
 ///
-/// The store is deliberately tolerant, in the spirit of `OllamaPull`: a missing
+/// The store is deliberately tolerant: a missing
 /// or corrupt file loads as empty and no public method ever throws. Stats are
 /// best-effort telemetry — a disk error must never interrupt a dictation.
 

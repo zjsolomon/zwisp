@@ -16,7 +16,7 @@ final class SetupModel {
     private let probe: PermissionProbe
     private let hotkeyStore: HotkeyStore
     private let speechInstaller: SpeechModelInstaller
-    private let ollamaInstaller: OllamaInstaller
+    private let cleanupInstaller: CleanupModelInstaller
     private let cleanup: CleanupService
     let config: Configuration
     private let actions: MainWindow.Actions
@@ -25,13 +25,9 @@ final class SetupModel {
 
     private(set) var permissions: OnboardingState
     private(set) var speechPhase: InstallPhase
-    private(set) var ollamaPhase: InstallPhase
     private(set) var cleanupModelPhase: InstallPhase
     private(set) var cleanupModelName: String
     private(set) var readyMessage: String
-    /// Ollama exists on disk in some form (app bundle or Homebrew CLI). Picks
-    /// the repair action when the server is down: start it vs install it.
-    private(set) var ollamaOnDisk: Bool
 
     /// Rising-edge tracker for `permissions.allGranted`. Seeded with the initial
     /// state so the very first refresh only fires `permissionsGranted` on a true
@@ -40,12 +36,12 @@ final class SetupModel {
     private var wasAllGranted: Bool
 
     init(probe: PermissionProbe, hotkeyStore: HotkeyStore,
-         speechInstaller: SpeechModelInstaller, ollamaInstaller: OllamaInstaller,
+         speechInstaller: SpeechModelInstaller, cleanupInstaller: CleanupModelInstaller,
          cleanup: CleanupService, config: Configuration, actions: MainWindow.Actions) {
         self.probe = probe
         self.hotkeyStore = hotkeyStore
         self.speechInstaller = speechInstaller
-        self.ollamaInstaller = ollamaInstaller
+        self.cleanupInstaller = cleanupInstaller
         self.cleanup = cleanup
         self.config = config
         self.actions = actions
@@ -57,66 +53,50 @@ final class SetupModel {
         let initialPermissions = probe.state()
         self.permissions = initialPermissions
         self.speechPhase = speechInstaller.phase
-        self.ollamaPhase = ollamaInstaller.appPhase
-        self.cleanupModelPhase = ollamaInstaller.modelPhase
-        self.cleanupModelName = cleanup.model
+        self.cleanupModelPhase = cleanupInstaller.phase
+        self.cleanupModelName = cleanup.modelName
         self.readyMessage = OnboardingState.readyMessage(
             hotkeyNames: hotkeyStore.hotkeys.map(\.name))
-        self.ollamaOnDisk = ollamaInstaller.serverToolOnDisk()
         self.wasAllGranted = initialPermissions.allGranted
     }
 
     // MARK: - Derived
 
-    /// Title for the single cleanup-section chain button, or `nil` when there's
-    /// nothing to do / work is underway. Composed from the snapshots via the
-    /// tested core rule so the copy lives in one place.
+    /// Title for the cleanup-section download button, or `nil` when there's
+    /// nothing to do / the download is underway. Composed from the snapshots
+    /// via the tested core rule so the copy lives in one place.
     var cleanupActionTitle: String? {
         SetupState(permissions: permissions,
                    speechModel: speechPhase,
-                   ollamaApp: ollamaPhase,
                    cleanupModel: cleanupModelPhase)
-            .cleanupActionTitle(modelName: cleanupModelName, ollamaOnDisk: ollamaOnDisk)
-    }
-
-    /// True when the chain button is the "Start Ollama…" variant — Ollama is
-    /// already on disk (or its model already pulled) but the server is down, so
-    /// the tap should only start the server, not re-run the install chain.
-    /// Must mirror the "Start Ollama…" branch of `cleanupActionTitle`.
-    var cleanupActionIsStartOnly: Bool {
-        !ollamaPhase.isInstalled && (ollamaOnDisk || cleanupModelPhase.isInstalled)
+            .cleanupActionTitle(modelName: cleanupModelName)
     }
 
     // MARK: - Refresh
 
-    /// Full re-snapshot: permissions, all three install phases, model name and
-    /// ready message. Safe to call at any time (e.g. from `MainWindow.refresh()`
+    /// Full re-snapshot: permissions, both install phases, and the ready
+    /// message. Safe to call at any time (e.g. from `MainWindow.refresh()`
     /// via an installer's `onPhaseChange`).
     func refresh() {
         permissions = probe.state()
         speechPhase = speechInstaller.phase
-        ollamaPhase = ollamaInstaller.appPhase
-        cleanupModelPhase = ollamaInstaller.modelPhase
-        cleanupModelName = cleanup.model
+        cleanupModelPhase = cleanupInstaller.phase
+        cleanupModelName = cleanup.modelName
         readyMessage = OnboardingState.readyMessage(
             hotkeyNames: hotkeyStore.hotkeys.map(\.name))
-        ollamaOnDisk = ollamaInstaller.serverToolOnDisk()
         detectRisingEdge()
     }
 
     /// One poll-timer tick. Permissions are cheap non-prompting reads so they
     /// refresh every tick (this is what flips a row to ✓ moments after the user
-    /// grants in System Settings). Ollama/cleanup detection hits the network, so
-    /// it's throttled to every third tick and skipped while a chain is running
-    /// (the installers drive their own progress via `onPhaseChange`).
+    /// grants in System Settings). The cleanup model's disk check is throttled
+    /// to every third tick and skipped while a download runs (the installer
+    /// drives its own progress via `onPhaseChange`).
     func refreshLive(tick: Int) {
         refreshPermissions()
-        guard tick % 3 == 0, !speechPhase.isBusy, !ollamaPhase.isBusy,
-              !cleanupModelPhase.isBusy else { return }
-        Task { @MainActor in
-            await ollamaInstaller.refreshDetection()
-            refresh()
-        }
+        guard tick % 3 == 0, !speechPhase.isBusy, !cleanupModelPhase.isBusy else { return }
+        cleanupInstaller.refreshFromDisk()
+        refresh()
     }
 
     private func refreshPermissions() {
@@ -148,21 +128,8 @@ final class SetupModel {
         refresh()
     }
 
-    /// The main cleanup-section chain button. Routes the "Start Ollama…" variant
-    /// to `startOllamaOnly` (server-only launch); everything else runs the full
-    /// install-what's-missing chain.
+    /// The cleanup-section download button — and the "Retry" on a failed row.
     func runCleanupAction() {
-        if cleanupActionIsStartOnly {
-            actions.startOllamaOnly()
-        } else {
-            actions.runCleanupSetup()
-        }
-        refresh()
-    }
-
-    /// "Retry" on a failed Ollama-app or cleanup-model row — always re-runs the
-    /// install chain (never the start-only shortcut).
-    func retryCleanupSetup() {
         actions.runCleanupSetup()
         refresh()
     }

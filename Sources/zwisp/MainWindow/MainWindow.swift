@@ -30,11 +30,8 @@ final class MainWindow {
         /// Fired on the false→true edge of "all permissions granted".
         let permissionsGranted: () -> Void
         let retrySpeechDownload: () -> Void
-        /// Runs the install-what's-missing cleanup chain (Ollama app + model).
+        /// Downloads the cleanup model (the engine ships inside the app).
         let runCleanupSetup: () -> Void
-        /// The "Start Ollama…" shortcut: model already pulled, just start the
-        /// server.
-        let startOllamaOnly: () -> Void
         let addHotkey: () -> Void
         let removeHotkey: (Hotkey) -> Void
         let cleanupSettingChanged: () -> Void
@@ -53,7 +50,7 @@ final class MainWindow {
 
     init(probe: PermissionProbe, hotkeyStore: HotkeyStore,
          dictionaryStore: DictionaryStore, styleRuleStore: StyleRuleStore,
-         speechInstaller: SpeechModelInstaller, ollamaInstaller: OllamaInstaller,
+         speechInstaller: SpeechModelInstaller, cleanupInstaller: CleanupModelInstaller,
          cleanup: CleanupService, overlayStore: OverlayStore,
          statsStore: StatsStore, waveFeed: WaveFeed,
          levelProvider: @escaping () -> Float,
@@ -61,7 +58,7 @@ final class MainWindow {
         self.model = MainWindowModel(
             probe: probe, hotkeyStore: hotkeyStore,
             dictionaryStore: dictionaryStore, styleRuleStore: styleRuleStore,
-            speechInstaller: speechInstaller, ollamaInstaller: ollamaInstaller,
+            speechInstaller: speechInstaller, cleanupInstaller: cleanupInstaller,
             cleanup: cleanup, overlayStore: overlayStore,
             statsStore: statsStore, waveFeed: waveFeed,
             levelProvider: levelProvider, config: config, actions: actions)

@@ -49,27 +49,16 @@ struct SetupSectionView: View {
                         .font(Theme.cardTitle)
                         .foregroundStyle(Theme.textPrimary)
                         .padding(.bottom, Theme.spaceXS)
-                    // Ollama is a service, not an artifact: its row reads
-                    // "Running"/"Not running" (a Homebrew CLI install has no app
-                    // bundle, so install wording would call a working server
-                    // missing).
-                    installRow(title: "Ollama",
-                               phase: setup.ollamaPhase,
-                               status: setup.ollamaPhase.serverStatusLine,
-                               showsDivider: true,
-                               onRetry: { setup.retryCleanupSetup() })
-                    installRow(title: setup.cleanupModelName,
+                    // The engine ships inside the app; the model file is the
+                    // whole install.
+                    installRow(title: "Cleanup model (\(setup.cleanupModelName))",
                                phase: setup.cleanupModelPhase,
-                               onRetry: { setup.retryCleanupSetup() })
+                               onRetry: { setup.runCleanupAction() })
                     if let title = setup.cleanupActionTitle {
                         Button(title) { setup.runCleanupAction() }
                             .buttonStyle(SecondaryButtonStyle())
                             .padding(.top, Theme.spaceM)
                     }
-                    Text("Other models: the AI Cleanup section.")
-                        .font(Theme.caption)
-                        .foregroundStyle(Theme.textTertiary)
-                        .padding(.top, Theme.spaceM)
                 }
             }
 
@@ -121,14 +110,11 @@ struct SetupSectionView: View {
         }
     }
 
-    /// One dependency row: title + status caption (defaults to the phase's
-    /// install wording; the Ollama row passes `serverStatusLine` instead), with
-    /// a trailing pixel progress bar while installing and a "Retry" button when
-    /// failed.
+    /// One dependency row: title + the phase's status caption, with a trailing
+    /// pixel progress bar while installing and a "Retry" button when failed.
     @ViewBuilder
     private func installRow(title: String,
                             phase: InstallPhase,
-                            status: String? = nil,
                             showsDivider: Bool = false,
                             onRetry: @escaping () -> Void) -> some View {
         HStack(spacing: Theme.spaceM) {
@@ -137,7 +123,7 @@ struct SetupSectionView: View {
                 Text(title)
                     .font(Theme.body)
                     .foregroundStyle(Theme.textPrimary)
-                Text(status ?? phase.statusLine)
+                Text(phase.statusLine)
                     .font(Theme.caption)
                     .foregroundStyle(Theme.textSecondary)
             }

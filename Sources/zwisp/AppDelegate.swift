@@ -16,7 +16,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private lazy var recorder = AudioRecorder(config: config.audio)
     private lazy var injector = TextInjector(config: config.injection)
-    private lazy var cleanup = CleanupService(config: config.cleanup)
+    /// Current localhost address of the bundled cleanup server, shared between
+    /// the supervisor (which may slide ports) and the client's URL provider.
+    /// (`Configuration.default` because stored-property initializers can't read
+    /// `config` — they're the same value.)
+    private let llamaAddress = LlamaServerAddress(
+        port: Configuration.default.cleanup.server.port)
+    /// The bundled llama-server child process. Started once the cleanup model
+    /// is on disk; its state changes re-derive the menu-bar cleanup colour.
+    @MainActor
+    private lazy var llamaServer: LlamaServerSupervisor = {
+        let supervisor = LlamaServerSupervisor(config: config.cleanup, address: llamaAddress)
+        supervisor.onStateChange = { [weak self] in self?.refreshCleanupStatus() }
+        return supervisor
+    }()
+    private lazy var cleanup = CleanupService(
+        config: config.cleanup,
+        engine: LlamaServerClient(config: config.cleanup, httpClient: URLSession.shared,
+                                  baseURL: { [llamaAddress] in llamaAddress.url }))
     private var transcriber: Transcriber?
     private var hotkeyMonitor: HotkeyMonitor?
     /// Eagerly transcribes while the hotkey is held (one worker per recording),
@@ -26,8 +43,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let hotkeyStore = HotkeyStore()
     private lazy var dictionaryStore = DictionaryStore(config: config.dictionary)
     private let styleRuleStore = StyleRuleStore()
-    /// The writing style whose system prompt is currently prefilled in Ollama's
-    /// KV cache. Warm-ups only fire when the resolved style differs from this.
+    /// The writing style whose system prompt is currently prefilled in the
+    /// engine's KV cache. Warm-ups only fire when the resolved style differs.
     private var lastWarmedStyle: WritingStyle = .standard
     /// Debounces app-switch/style-change re-warms so a flurry of activations
     /// prefills once, not per event.
@@ -56,18 +73,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return installer
     }()
 
-    /// Owns the optional AI-cleanup dependency chain (install Ollama, start the
-    /// server, pull the recommended model). `onCleanupModelReady` re-checks the
-    /// cleanup status so the freshly available model gets its KV cache warmed.
+    /// Owns the optional cleanup-model download (the engine itself ships in the
+    /// bundle, so the model file is the whole dependency).
     @MainActor
-    private lazy var ollamaInstaller: OllamaInstaller = {
-        let installer = OllamaInstaller(cleanup: cleanup, setup: config.setup)
+    private lazy var cleanupModelInstaller: CleanupModelInstaller = {
+        let installer = CleanupModelInstaller(modelFile: config.cleanup.modelFile,
+                                              setup: config.setup)
         installer.onPhaseChange = { [weak self] in
             self?.mainWindow.refresh()
             self?.refreshState()
-        }
-        installer.onCleanupModelReady = { [weak self] in
-            self?.refreshCleanupStatus()
         }
         return installer
     }()
@@ -89,7 +103,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var mainWindow = MainWindow(
         probe: probe, hotkeyStore: hotkeyStore,
         dictionaryStore: dictionaryStore, styleRuleStore: styleRuleStore,
-        speechInstaller: speechInstaller, ollamaInstaller: ollamaInstaller,
+        speechInstaller: speechInstaller, cleanupInstaller: cleanupModelInstaller,
         cleanup: cleanup, overlayStore: overlayStore,
         statsStore: statsStore, waveFeed: waveFeed,
         levelProvider: { [weak self] in self?.recorder.currentLevel() ?? 0 },
@@ -106,8 +120,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.refreshState()
             },
             retrySpeechDownload: { [weak self] in self?.startSpeechModelSetup() },
-            runCleanupSetup: { [weak self] in self?.ollamaInstaller.runSetupChain() },
-            startOllamaOnly: { [weak self] in self?.startOllama() },
+            runCleanupSetup: { [weak self] in self?.startCleanupModelDownload() },
             addHotkey: { [weak self] in self?.presentAddHotkey() },
             removeHotkey: { [weak self] hotkey in self?.removeHotkey(hotkey) },
             cleanupSettingChanged: { [weak self] in self?.refreshCleanupStatus() },
@@ -169,13 +182,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // were invalidated (e.g. by a re-signed build). Mic alone doesn't force
         // the window — its own system prompt fires on the first dictation. The
         // speech model missing also forces it (the app is inert without it);
-        // Ollama/cleanup missing alone never does — it's optional-by-design.
+        // the cleanup model missing alone never does — it's optional-by-design.
         if permissions.needsSetup || speechInstaller.installedFolder() == nil {
             mainWindow.present(section: .setup)
         }
+        // Cleanup is served by the llama-server bundled in the app. One-time
+        // note for machines upgrading from the Ollama era (we never uninstall
+        // the user's own Ollama — we just stop depending on it).
+        if UserDefaults.standard.string(forKey: "cleanupModel") != nil {
+            UserDefaults.standard.removeObject(forKey: "cleanupModel")
+            Log.write("cleanup engine: now the bundled llama-server; Ollama is no longer used")
+        }
+        if let model = cleanupModelInstaller.installedFile() {
+            llamaServer.start(modelPath: model)
+        }
         refreshCleanupStatus()
-        // Track Ollama coming and going while we're idle (cheap localhost
-        // call), so the blue/green icon doesn't go stale.
+        // Re-derive the cleanup status while we're idle (cheap localhost
+        // health probe), so the blue/green icon doesn't go stale.
         cleanupPollTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             // Scheduled-timer body runs on the main run loop; assert the
             // isolation so this `@Sendable` closure can touch the main-actor
@@ -202,6 +225,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                        hasVisibleWindows flag: Bool) -> Bool {
         mainWindow.present()
         return false
+    }
+
+    /// The bundled cleanup server holds ~3 GB resident; it must not outlive
+    /// the app that owns it.
+    func applicationWillTerminate(_ notification: Notification) {
+        llamaServer.terminate()
     }
 
     /// Entry point for readying the speech model. Uses the on-disk copy if the
@@ -407,7 +436,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                          targetPID: pid_t?, style: WritingStyle,
                          worker: StreamingWorker?) async {
         // Per-stage timings, so "dictation felt slow" is attributable from the
-        // log to transcription vs cleanup (whose own breakdown Ollama reports).
+        // log to transcription vs cleanup (whose own breakdown the engine reports).
         let transcribeStart = Date()
         let result = await transcribe(samples: samples, with: transcriber, worker: worker)
         let raw = result.text
@@ -468,7 +497,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 waveFeed.phase = .idle
             }
             refreshState()
-            // The dictation just exercised Ollama; sync the blue/green icon.
+            // The dictation just exercised the engine; sync the blue/green icon.
             refreshCleanupStatus()
         }
         guard !text.isEmpty else {
@@ -516,7 +545,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ) {
                 return waited
             }
-            try? await Task.sleep(nanoseconds: 100_000_000)
+            // Poll tightly (20 ms): the gate typically opens the instant the
+            // hotkey modifier is released, so a coarse cadence just adds latency
+            // between "safe to type" and the injection actually firing.
+            try? await Task.sleep(nanoseconds: 20_000_000)
         }
     }
 
@@ -548,10 +580,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.cleanupStatus = status
                 Log.write("cleanup status: \(status)")
                 self.refreshState()
-                // Cleanup just became ready (launch, model change, toggle-on,
-                // Ollama [re]started): pre-load the model and prefill the
-                // system prompt now, so the next dictation's cleanup is warm
-                // instead of paying a multi-second cold start.
+                // Cleanup just became ready (launch, toggle-on, the server
+                // [re]started): prefill the system prompt now, so the next
+                // dictation's cleanup is warm instead of paying a multi-second
+                // cold start.
                 if case .active = status {
                     Task { await self.cleanup.warmUp(style: self.lastWarmedStyle) }
                 }
@@ -674,19 +706,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await cleanup.warmUp(style: lastWarmedStyle) }
     }
 
-    /// User clicked "Ollama isn't running — click to start" (or the setup
-    /// window's "Start Ollama…"). The launch strategies (app bundle, CLI
-    /// `ollama serve`) now live in `OllamaInstaller.launchServer()`; here we just
-    /// fire it and re-check the icon soon after instead of waiting out the 30 s
-    /// poll. (This path is only offered when Ollama IS installed; installing it
-    /// from scratch goes through the setup window's cleanup chain.)
-    @objc private func startOllama() {
-        for delay in [3.0, 8.0] {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                self?.refreshCleanupStatus()
-            }
-        }
-        ollamaInstaller.launchServer()
+    /// The setup window's "Download <model>…" button. Once the file lands,
+    /// start the bundled server against it — the supervisor's health poll then
+    /// flips the status (and warms the prompt cache) via `onStateChange`.
+    private func startCleanupModelDownload() {
+        cleanupModelInstaller.startDownload(onReady: { [weak self] model in
+            self?.llamaServer.start(modelPath: model)
+        })
     }
 
     @objc private func toggleCleanup(_ sender: NSMenuItem) {

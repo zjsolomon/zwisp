@@ -35,7 +35,7 @@ public enum MainNav {
     /// Whether Setup should flag for attention — mirrors the launch auto-show
     /// gate: the two hotkey permissions missing (via `OnboardingState.needsSetup`,
     /// which excludes the microphone) OR the speech model not yet on disk. The
-    /// optional Ollama cleanup chain never counts here.
+    /// optional cleanup-model download never counts here.
     public static func setupNeedsAttention(permissions: OnboardingState,
                                            speechModelInstalled: Bool) -> Bool {
         permissions.needsSetup || !speechModelInstalled

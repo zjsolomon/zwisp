@@ -7,7 +7,7 @@
 typed into whatever app is focused. An open-source, local-first alternative to
 hosted dictation tools like Wispr Flow: the same hold-a-key-anywhere workflow,
 but nothing leaves your Mac, and no account is required. The only network
-access is a one-time download of the speech model.
+access is a one-time download of the models.
 
 [![CI](https://github.com/zjsolomon/zwisp/actions/workflows/ci.yml/badge.svg)](https://github.com/zjsolomon/zwisp/actions/workflows/ci.yml)
 ![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-blue)
@@ -36,10 +36,12 @@ key held  ──►  record mic (16 kHz)  ──►  release  ──►  Whisper
   synthetic key events, so it never touches or clobbers your clipboard.
 - **Your keys** — Right ⌘ by default; bind any modifier key you like, even
   several at once.
-- **Optional AI cleanup** — pipe the raw transcript through a local LLM
-  ([Ollama](https://ollama.com)) to remove filler words, apply self-corrections,
-  and fix punctuation — still fully offline, with guardrails so a bad model
-  response never replaces your words.
+- **Optional AI cleanup** — pipe the raw transcript through a local LLM to
+  remove filler words, apply self-corrections, and fix punctuation — still
+  fully offline, with guardrails so a bad model response never replaces your
+  words. The engine ships inside the app (a bundled
+  [llama.cpp](https://github.com/ggml-org/llama.cpp) server with speculative
+  decoding tuned for transcript editing) — nothing else to install.
 - **Personal dictionary** — teach zwisp names and terms it keeps mishearing
   ("Ziedo", "zwisp", "WhisperKit"). Future dictations use your exact spelling.
 - **Per-app writing styles** — cleanup can write formally in Mail and casually
@@ -52,9 +54,9 @@ key held  ──►  record mic (16 kHz)  ──►  release  ──►  Whisper
   Home dashboard (live wave, pipeline status, local dictation stats), guided
   setup, and every setting. zwisp counts your dictations and words; it never
   stores what you said.
-- **Guided setup** — the Setup section walks through the permissions, downloads
-  the speech model with visible progress, and can install Ollama and the cleanup
-  model for you.
+- **Guided setup** — the Setup section walks through the permissions and
+  downloads the speech model (and, if you want cleanup, the cleanup model) with
+  visible progress.
 - **Stays out of the way** — lives in the menu bar with no Dock icon; the window
   opens when you want it and closes without a trace. Can launch at login.
 - **Small codebase** — a compact, dependency-light Swift project that is
@@ -84,7 +86,7 @@ separate privacy permissions, and zwisp also needs to fetch its speech model.
 **zwisp opens its window on the Setup section at first launch** and walks
 through all of it: one button per permission (each row's LED lights as you
 grant it), a live-progress download of the speech model, and — optionally — a
-one-click install of Ollama plus the recommended cleanup model. The section
+one-click download of the AI-cleanup model. The section
 tells you when you're ready to dictate. Closed it early? Open the window any
 time via the menu-bar icon → **Open zwisp…** (the Setup row carries a dot
 until everything's in place).
@@ -108,10 +110,9 @@ Setup downloads the speech model from Hugging Face for you (the default
 `large-v3-turbo` is ~1.5 GB; lighter models are much smaller — see
 [Configuration](#configuration)), showing progress as it goes. That's the only
 download dictation needs; afterwards it runs fully offline. Want AI cleanup too?
-The optional **AI cleanup** steps install Ollama (from the official signed
-build, signature-verified before it's trusted) and pull the recommended model —
-or you can bring your own Ollama and pick a different model later in the
-window's **AI Cleanup** section.
+The optional **AI cleanup** step downloads its model (~2.5 GB, verified against
+a pinned checksum before it's ever served) — the engine itself already ships
+inside the app.
 
 ## Usage
 
@@ -135,7 +136,7 @@ window's **AI Cleanup** section.
 |---|---|
 | 🔴 Red | Warming up — the speech model is still loading (a few seconds after launch). Dictation is ignored until this clears. |
 | 🟢 Green | Ready to dictate. AI cleanup is off or unavailable, so you get the raw transcript. |
-| 🔵 Blue | Ready to dictate, and AI cleanup is active — transcripts get cleaned up by your Ollama model. |
+| 🔵 Blue | Ready to dictate, and AI cleanup is active — transcripts get cleaned up by the local model. |
 | ⚪ Grey | Transcribing a dictation you just finished. |
 | 🟠 Orange | Permissions missing — hover the icon to see which, then **Open zwisp…** → Setup. See [First-run setup](#first-run-setup-one-time). |
 
@@ -205,7 +206,7 @@ focus from the app you're dictating into. Turn it off in the window's
 **Dictation** section (**Show wave while dictating**); the big equalizer on the
 Home dashboard keeps dancing either way.
 
-## Optional: AI cleanup with Ollama
+## Optional: AI cleanup
 
 Raw speech-to-text is literal: it keeps filler words and false starts, and often
 lacks punctuation. zwisp can optionally pass each transcript through a local
@@ -223,39 +224,28 @@ like "okay, let's see here" are your voice and stay in. It only:
   dictated enumerations ("number one … number two …" → "1. … 2. …"),
 - fixes capitalisation and sentence punctuation.
 
-It uses [Ollama](https://ollama.com), which needs no API key and keeps everything
-local. The **setup window's AI cleanup section installs it for you** — or set it
-up by hand if you prefer:
+### The engine
 
-```bash
-brew install ollama        # or download from ollama.com
-ollama serve               # start the local server (also runs as a login service)
-ollama pull qwen3:4b-instruct    # ~2.5 GB, one time
-```
+zwisp bundles its own inference engine — a pinned
+[llama.cpp](https://github.com/ggml-org/llama.cpp) server that runs as a
+private localhost subprocess, owned by the app and gone when the app quits.
+There is nothing to install and no third-party app to manage: the Setup section
+downloads the one model zwisp serves (**Qwen3 4B**, ~2.5 GB, checksum-verified),
+and cleanup is live.
 
-Either way, zwisp finds Ollama by asking whether a server answers on the local
-port — a Homebrew CLI install with no `Ollama.app` works fine. If it's installed
-but not running, the Setup and AI Cleanup sections offer **Start Ollama…**,
-which launches it for you.
+Two things make it fast on ordinary Apple Silicon:
 
-Cleanup is on by default. Pick which of your installed models to use in the
-window's **AI Cleanup** section; the menu bar keeps a quick **Clean Up
-Transcripts** toggle for turning it off mid-flow.
+- **Speculative decoding tuned for transcript editing.** Cleanup output is
+  mostly your own words in order, so the engine drafts tokens straight from the
+  transcript already sitting in the prompt and verifies them in batches —
+  measurably 2–3× faster than conventional serving, with bit-identical output.
+- **A resident model with a prefilled prompt.** The model never unloads while
+  zwisp runs, and the instruction prompt (with your dictionary and writing
+  style) is prefilled ahead of time, so a dictation pays only for its own words.
 
-### Which model?
-
-Benchmarked on zwisp's own cleanup battery (Apple Silicon, warm model,
-median per-dictation latency):
-
-| Model | Size | Median | Notes |
-|---|---|---|---|
-| `qwen3:4b-instruct` | 2.5 GB | ~0.7 s | **Default.** Best punctuation and fidelity; question marks and commas consistently right. |
-| `llama3.2:3b` | 2.0 GB | ~0.5 s | Fastest; occasional comma/question-mark slips. |
-| `gemma3:4b` | 3.3 GB | ~2.5 s | Excellent fidelity, but noticeably slow, and outputs typographic (curly) quotes. |
-
-Avoid `phi4-mini` (paraphrases the speaker) and thinking-mode models like
-`deepseek-r1` (reasoning latency; zwisp suppresses thinking where the model
-allows it, but non-thinking instruct models are the right tool).
+Cleanup is on by default; the menu bar keeps a quick **Clean Up Transcripts**
+toggle for turning it off mid-flow, and dictations that would predictably take
+too long to clean are typed raw immediately instead of making you wait.
 
 Guardrails make cleanup fail-safe — dictation always works, and a bad model
 response never replaces your words.
@@ -263,9 +253,8 @@ response never replaces your words.
 <details>
 <summary>How the guardrails work</summary>
 
-- If Ollama isn't running or errors, the raw transcript is used unchanged.
-- The model is asked not to reason out loud (`think: false`), and any
-  chain-of-thought that slips through (`<think>…</think>`) is stripped.
+- If the engine isn't running or errors, the raw transcript is used unchanged.
+- Any chain-of-thought the model emits (`<think>…</think>`) is stripped.
 - Output is sanity-checked before it's typed: added preambles ("Here is the
   cleaned text:"), wrapping quotes, echoed delimiters, and stray end-tokens are
   stripped, and an output that balloons past the input (the model "answering"
@@ -274,8 +263,9 @@ response never replaces your words.
 - The conservation rule is enforced in code, not just prompted: if the model's
   output drops too many of the words you actually said, it's treated as a
   paraphrase and discarded — the raw transcript is typed instead.
-- Generation is capped relative to input length, and the model is kept warm
-  between dictations so cleanup stays fast.
+- Generation is capped relative to input length, and a cleanup that can't
+  plausibly finish fast (predicted from the engine's measured speed) is skipped
+  up front rather than timed out.
 
 </details>
 
@@ -289,9 +279,9 @@ All tunable settings live in one file:
   - `distil-whisper_distil-large-v3_turbo` — smaller, English-leaning
   - `openai_whisper-small.en` — much smaller, lower accuracy
   - `openai_whisper-base.en` — tiny and fastest
-- **AI cleanup** — the `Cleanup` struct sets the default Ollama model, prompt,
-  endpoint, timeout, keep-alive, and output-length budget. The active model is
-  picked in the window's AI Cleanup section.
+- **AI cleanup** — the `Cleanup` struct sets the prompt, timeout, output-length
+  budget, the bundled server's launch flags (port, context size, speculation
+  tuning) and the pinned model file (name, URL, checksum).
 - **Hotkeys** — configured in the app (see
   [Changing hotkeys](#changing-hotkeys)); the default is defined by
   `HotkeyStore.defaultHotkeys`.
@@ -329,7 +319,9 @@ release build on every push and pull request.
 | `MenuBarState.swift` | Menu-bar state + pure state derivation |
 | `Hotkey.swift` | The push-to-talk modifier keys and their flag masks |
 | `HotkeyStore.swift` | Persists the user's hotkeys (add/remove) |
-| `CleanupService.swift` | Optional local LLM cleanup pass via Ollama |
+| `CleanupService.swift` | Optional local LLM cleanup pass: prompts, budgets, guardrails |
+| `CleanupEngine.swift` | The serving seam under `CleanupService` (protocol + timings) |
+| `LlamaServerClient.swift` | Talks to the bundled llama-server over localhost |
 | `WritingStyle.swift` | The styles and the prompt block each contributes |
 | `StyleRules.swift` | Per-app style rules: storage and resolution |
 | `DictionaryStore.swift` | Persists the personal dictionary |
@@ -345,7 +337,6 @@ release build on every push and pull request.
 | `OnboardingState.swift` | The permission checklist model and its copy |
 | `SetupState.swift` | Composes the checklist with the Setup section's install phases |
 | `SpeechModelLayout.swift` | Where the speech model lives on disk, and whether it's complete |
-| `OllamaPull.swift` | Parses Ollama's `/api/pull` progress stream |
 | `Logger.swift` | Append-to-file logger |
 
 **`zwisp`** — the app: system-framework and WhisperKit glue on top of the core:
@@ -363,7 +354,8 @@ release build on every push and pull request.
 | `FrontmostContext.swift` | The frontmost app and window title, captured at record time |
 | `PermissionProbe.swift` | Live permission status and System Settings deep links |
 | `SpeechModelInstaller.swift` | Downloads the speech model with progress |
-| `OllamaInstaller.swift` | Installs Ollama (signature-verified) and pulls the cleanup model |
+| `CleanupModelInstaller.swift` | Downloads the cleanup model with progress (checksum-verified) |
+| `LlamaServerSupervisor.swift` | Runs the bundled llama-server: spawn, health, restart, teardown |
 | `MainWindow/` | The app window: sidebar navigation, dark theme, Home dashboard, setup + settings sections |
 
 ## Limitations
@@ -391,7 +383,8 @@ not taking issues or pull requests.
 
 - [WhisperKit](https://github.com/argmaxinc/WhisperKit) by Argmax for on-device
   Whisper inference.
-- [Ollama](https://ollama.com) for running local LLMs.
+- [llama.cpp](https://github.com/ggml-org/llama.cpp) by Georgi Gerganov and
+  contributors for the bundled cleanup engine.
 
 ## License
 

@@ -12,11 +12,9 @@ struct SetupStateTests {
     /// Everything installed and granted unless overridden.
     private func state(permissions: OnboardingState? = nil,
                        speechModel: InstallPhase = .installed,
-                       ollamaApp: InstallPhase = .installed,
                        cleanupModel: InstallPhase = .installed) -> SetupState {
         SetupState(permissions: permissions ?? perms(),
                    speechModel: speechModel,
-                   ollamaApp: ollamaApp,
                    cleanupModel: cleanupModel)
     }
 
@@ -35,11 +33,10 @@ struct SetupStateTests {
         #expect(state(speechModel: .failed("nope")).needsSetup)
     }
 
-    @Test func ollamaAndCleanupModelAloneNeverForceSetup() {
-        // Cleanup is optional-by-design; a missing Ollama or model doesn't nag.
-        #expect(!state(ollamaApp: .missing).needsSetup)
+    @Test func cleanupModelAloneNeverForcesSetup() {
+        // Cleanup is optional-by-design; a missing model doesn't nag.
         #expect(!state(cleanupModel: .missing).needsSetup)
-        #expect(!state(ollamaApp: .missing, cleanupModel: .missing).needsSetup)
+        #expect(!state(cleanupModel: .failed("disk full")).needsSetup)
     }
 
     @Test func noSetupNeededWhenPermissionsGrantedAndSpeechInstalled() {
@@ -48,56 +45,35 @@ struct SetupStateTests {
 
     // MARK: - cleanupReady
 
-    @Test func cleanupReadyRequiresBothOllamaAndModel() {
+    @Test func cleanupReadyTracksTheModelFile() {
+        // The engine ships inside the app; the model file is the only dependency.
         #expect(state().cleanupReady)
-        #expect(!state(ollamaApp: .missing).cleanupReady)
         #expect(!state(cleanupModel: .missing).cleanupReady)
-        #expect(!state(ollamaApp: .missing, cleanupModel: .missing).cleanupReady)
+        #expect(!state(cleanupModel: .installing(stage: "Downloading", fraction: 0.5)).cleanupReady)
     }
 
     // MARK: - cleanupActionTitle()
 
-    @Test func cleanupActionTitleFullChainWhenNothingInstalled() {
-        let title = state(ollamaApp: .missing, cleanupModel: .missing)
-            .cleanupActionTitle(modelName: "qwen3:4b-instruct")
-        #expect(title == "Install Ollama & download qwen3:4b-instruct…")
+    @Test func cleanupActionTitleOffersTheDownloadWhenMissing() {
+        let title = state(cleanupModel: .missing).cleanupActionTitle(modelName: "Qwen3 4B")
+        #expect(title == "Download Qwen3 4B (~2.5 GB)…")
     }
 
-    @Test func cleanupActionTitlePullOnlyWhenOllamaReadyButModelMissing() {
-        let title = state(ollamaApp: .installed, cleanupModel: .missing)
-            .cleanupActionTitle(modelName: "qwen3:4b-instruct")
-        #expect(title == "Download qwen3:4b-instruct (~2.6 GB)…")
-    }
-
-    @Test func cleanupActionTitleStartOnlyWhenModelOnDiskButServerDown() {
-        // Model already pulled, but Ollama's server isn't up — just start it.
-        let title = state(ollamaApp: .missing, cleanupModel: .installed)
-            .cleanupActionTitle(modelName: "qwen3:4b-instruct")
-        #expect(title == "Start Ollama…")
-    }
-
-    @Test func cleanupActionTitleStartOnlyWhenOllamaOnDiskButServerDown() {
-        // Ollama exists on disk (app bundle or Homebrew CLI) with the server
-        // down: offer to start it — never to install alongside it. The model
-        // may still need pulling, but that's only knowable once the server is
-        // up, at which point the button becomes the pull variant.
-        let title = state(ollamaApp: .missing, cleanupModel: .missing)
-            .cleanupActionTitle(modelName: "qwen3:4b-instruct", ollamaOnDisk: true)
-        #expect(title == "Start Ollama…")
+    @Test func cleanupActionTitleOffersTheDownloadAfterAFailure() {
+        // "Retry" semantics: a failed download is re-offered, not hidden.
+        let title = state(cleanupModel: .failed("connection dropped"))
+            .cleanupActionTitle(modelName: "Qwen3 4B")
+        #expect(title == "Download Qwen3 4B (~2.5 GB)…")
     }
 
     @Test func cleanupActionTitleNilWhenReady() {
-        #expect(state().cleanupActionTitle(modelName: "qwen3:4b-instruct") == nil)
+        #expect(state().cleanupActionTitle(modelName: "Qwen3 4B") == nil)
     }
 
     @Test func cleanupActionTitleNilWhileBusy() {
-        // A running chain must not offer a button that would race it.
-        #expect(state(ollamaApp: .installing(stage: "Downloading Ollama", fraction: 0.3),
-                      cleanupModel: .missing)
-            .cleanupActionTitle(modelName: "qwen3:4b-instruct") == nil)
-        #expect(state(ollamaApp: .installed,
-                      cleanupModel: .installing(stage: "Pulling", fraction: nil))
-            .cleanupActionTitle(modelName: "qwen3:4b-instruct") == nil)
+        // A running download must not offer a button that would race it.
+        #expect(state(cleanupModel: .installing(stage: "Downloading", fraction: 0.3))
+            .cleanupActionTitle(modelName: "Qwen3 4B") == nil)
     }
 
     // MARK: - InstallPhase.statusLine
@@ -108,19 +84,9 @@ struct SetupStateTests {
         #expect(InstallPhase.failed("disk full").statusLine == "Failed: disk full")
     }
 
-    @Test func serverStatusLineUsesReachabilityWording() {
-        // The Ollama row: a service's truth is reachability, not disk presence.
-        #expect(InstallPhase.missing.serverStatusLine == "Not running")
-        #expect(InstallPhase.installed.serverStatusLine == "Running")
-        // Progress and failure states pass through the install wording.
-        #expect(InstallPhase.installing(stage: "Starting Ollama", fraction: nil)
-            .serverStatusLine == "Starting Ollama…")
-        #expect(InstallPhase.failed("timeout").serverStatusLine == "Failed: timeout")
-    }
-
     @Test func statusLineRendersPercentWhenFractionKnown() {
-        #expect(InstallPhase.installing(stage: "Downloading Ollama", fraction: 0.42).statusLine
-            == "Downloading Ollama — 42%")
+        #expect(InstallPhase.installing(stage: "Downloading model", fraction: 0.42).statusLine
+            == "Downloading model — 42%")
     }
 
     @Test func statusLineIsIndeterminateWithoutFraction() {

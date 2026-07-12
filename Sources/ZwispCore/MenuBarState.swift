@@ -33,7 +33,7 @@ public enum MenuBarState: Equatable {
         case .ready(.active(let model)):
             return "Ready — AI cleanup via \(model)"
         case .ready(.unavailable):
-            return "Ready — AI cleanup unavailable (is Ollama running?)"
+            return "Ready — AI cleanup unavailable (engine not running)"
         case .ready(.off):
             return "Ready — AI cleanup off"
         case .recording:
