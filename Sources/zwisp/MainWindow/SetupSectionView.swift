@@ -37,7 +37,7 @@ struct SetupSectionView: View {
                         .font(Theme.cardTitle)
                         .foregroundStyle(Theme.textPrimary)
                         .padding(.bottom, Theme.spaceXS)
-                    installRow(title: "Speech model",
+                    installRow(title: "Speech model (\(setup.speechModelName))",
                                phase: setup.speechPhase,
                                hint: setup.speechHint,
                                onRetry: { setup.retrySpeechDownload() })

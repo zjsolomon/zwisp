@@ -63,7 +63,7 @@ struct DictationSectionView: View {
             Card {
                 SettingRow(title: "Speech model",
                            caption: "On-device via WhisperKit; nothing leaves your Mac.") {
-                    Text(model.whisperModel)
+                    Text("\(model.speechModelName) — runs on this Mac")
                         .font(Theme.caption)
                         .foregroundStyle(Theme.textSecondary)
                         .textSelection(.enabled)

@@ -32,4 +32,46 @@ public enum SpeechModelLayout {
     public static func isComplete(folderContents: Set<String>) -> Bool {
         requiredBundles.isSubset(of: folderContents)
     }
+
+    /// A human name for a WhisperKit variant, for the UI:
+    /// `openai_whisper-large-v3-v20240930_turbo` → `Whisper large-v3 turbo`.
+    /// The raw variant is a repo path — publisher prefix, release datestamp,
+    /// underscores — none of which a person needs to read. Anything that
+    /// doesn't match the known shapes falls through to the variant itself, so
+    /// an unrecognised model still names itself rather than showing blank.
+    public static func displayName(variant: String) -> String {
+        var name = variant
+        // Publisher prefix (`openai_whisper-…`, `distil-whisper_distil-…`).
+        for publisher in ["openai_", "argmaxinc_"] where name.hasPrefix(publisher) {
+            name.removeFirst(publisher.count)
+        }
+        name = strippingDatestamp(from: name)
+        name = name.replacingOccurrences(of: "_", with: " ")
+        // Capitalize the family, which is now the leading word.
+        for (family, pretty) in [("whisper-", "Whisper "),
+                                 ("distil-whisper ", "Distil-Whisper ")]
+        where name.hasPrefix(family) {
+            name = pretty + name.dropFirst(family.count)
+        }
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty ? variant : trimmed
+    }
+
+    /// Drops a `-vYYYYMMDD` release stamp (e.g. `-v20240930`) anywhere in the
+    /// variant. It identifies the upload, not the model, and only clutters the
+    /// name.
+    private static func strippingDatestamp(from name: String) -> String {
+        var result = name
+        var index = result.startIndex
+        while let marker = result.range(of: "-v", range: index..<result.endIndex) {
+            let digits = result[marker.upperBound...].prefix(8)
+            if digits.count == 8, digits.allSatisfy(\.isNumber) {
+                result.removeSubrange(marker.lowerBound..<result.index(marker.upperBound, offsetBy: 8))
+                index = marker.lowerBound
+            } else {
+                index = marker.upperBound
+            }
+        }
+        return result
+    }
 }

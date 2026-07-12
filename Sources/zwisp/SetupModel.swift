@@ -30,6 +30,9 @@ final class SetupModel {
     private(set) var speechHint: String?
     private(set) var cleanupModelPhase: InstallPhase
     private(set) var cleanupModelName: String
+    /// Human name of the speech model in use, e.g. "Whisper large-v3 turbo" —
+    /// the Setup row names it the way the cleanup row names its model.
+    let speechModelName: String
     private(set) var readyMessage: String
 
     /// Rising-edge tracker for `permissions.allGranted`. Seeded with the initial
@@ -59,6 +62,7 @@ final class SetupModel {
         self.speechHint = speechInstaller.phaseHint
         self.cleanupModelPhase = cleanupInstaller.phase
         self.cleanupModelName = cleanup.modelName
+        self.speechModelName = SpeechModelLayout.displayName(variant: config.whisperModel)
         self.readyMessage = OnboardingState.readyMessage(
             hotkeyNames: hotkeyStore.hotkeys.map(\.name))
         self.wasAllGranted = initialPermissions.allGranted

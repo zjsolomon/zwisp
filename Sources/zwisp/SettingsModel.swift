@@ -32,7 +32,9 @@ final class SettingsModel {
     private(set) var cleanupEnabled: Bool = false
     /// The one bundled cleanup model's display name (static — no picker).
     private(set) var cleanupModelName: String = ""
-    private(set) var whisperModel: String = ""
+    /// Human name of the speech model, e.g. "Whisper large-v3 turbo" (the raw
+    /// variant is a repo path — publisher prefix, datestamp — not a name).
+    private(set) var speechModelName: String = ""
     private(set) var launchAtLogin: Bool = false
     private(set) var overlayEnabled: Bool = false
 
@@ -71,7 +73,7 @@ final class SettingsModel {
         defaultStyle = styleRuleStore.defaultStyle
         cleanupEnabled = cleanup.enabled
         cleanupModelName = cleanup.modelName
-        whisperModel = config.whisperModel
+        speechModelName = SpeechModelLayout.displayName(variant: config.whisperModel)
         launchAtLogin = (SMAppService.mainApp.status == .enabled)
         overlayEnabled = overlayStore.enabled
     }
