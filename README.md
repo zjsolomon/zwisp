@@ -22,8 +22,14 @@ cd zwisp && ./install.sh    # builds, installs to /Applications, launches
 ```
 
 Needs an Apple Silicon Mac on macOS 14+ and a Swift toolchain
-(`xcode-select --install`). macOS will then ask for a few one-time
-permissions — see [First-run setup](#first-run-setup-one-time).
+(`xcode-select --install`). There's no notarized download yet — building from
+source is the whole install. macOS will then ask for a few one-time
+permissions — see [First-run setup](#first-run-setup-one-time). Once running,
+toggle **Launch at Login** from the menu-bar icon if you'd like it on every
+boot.
+
+> Prefer not to install into `/Applications`? `./build-app.sh` produces
+> `zwisp.app` in the project folder — `open` it from there.
 
 ```
 key held  ──►  record mic (16 kHz)  ──►  release  ──►  WhisperKit (on-device)  ──►  types text
@@ -36,12 +42,10 @@ key held  ──►  record mic (16 kHz)  ──►  release  ──►  Whisper
   synthetic key events, so it never touches or clobbers your clipboard.
 - **Your keys** — Right ⌘ by default; bind any modifier key you like, even
   several at once.
-- **Optional AI cleanup** — pipe the raw transcript through a local LLM to
-  remove filler words, apply self-corrections, and fix punctuation — still
-  fully offline, with guardrails so a bad model response never replaces your
-  words. The engine ships inside the app (a bundled
-  [llama.cpp](https://github.com/ggml-org/llama.cpp) server with speculative
-  decoding tuned for transcript editing) — nothing else to install.
+- **Optional AI cleanup** — a local LLM removes filler words, applies
+  self-corrections, and fixes punctuation — still fully offline, with guardrails
+  so a bad model response never replaces your words. The engine ships inside
+  the app; there's nothing else to install.
 - **Personal dictionary** — teach zwisp names and terms it keeps mishearing
   ("Ziedo", "zwisp", "WhisperKit"). Future dictations use your exact spelling.
 - **Per-app writing styles** — cleanup can write formally in Mail and casually
@@ -62,34 +66,15 @@ key held  ──►  record mic (16 kHz)  ──►  release  ──►  Whisper
 - **Small codebase** — a compact, dependency-light Swift project that is
   straightforward to read and audit.
 
-## Installation
-
-There's no notarized download yet, so you build it once from source — the two
-commands in [Quick start](#quick-start) are the whole install. You'll need:
-
-- an Apple Silicon Mac running macOS 14 (Sonoma) or later,
-- a Swift toolchain — Xcode, or the Command Line Tools
-  (`xcode-select --install`).
-
-`./install.sh` builds the app, copies it to `/Applications`, and launches it.
-The first launch opens the app window on the guided setup (below). Once
-running, toggle **Launch at Login** from the 🎙️ menu-bar icon if you'd like it
-to start automatically on every boot.
-
-> Prefer not to install into `/Applications`? Run `./build-app.sh` to produce
-> `zwisp.app` in the project folder and `open zwisp.app` from there.
-
 ## First-run setup (one time)
 
 macOS gates microphone access, global hotkeys, and synthetic typing behind
-separate privacy permissions, and zwisp also needs to fetch its speech model.
+separate privacy permissions, and zwisp also needs to fetch its models.
 **zwisp opens its window on the Setup section at first launch** and walks
-through all of it: one button per permission (each row's LED lights as you
-grant it), a live-progress download of the speech model, and — optionally — a
-one-click download of the AI-cleanup model. The section
-tells you when you're ready to dictate. Closed it early? Open the window any
-time via the menu-bar icon → **Open zwisp…** (the Setup row carries a dot
-until everything's in place).
+through all of it — one button per step, each row's LED lighting as it
+completes — then tells you when you're ready to dictate. Closed it early? Open
+the window any time via the menu-bar icon → **Open zwisp…** (the Setup row
+carries a dot until everything's in place).
 
 For reference, the three permissions it walks you through:
 
@@ -101,18 +86,14 @@ For reference, the three permissions it walks you through:
 3. **Accessibility** — System Settings → Privacy & Security → **Accessibility** →
    enable **zwisp**. Required to type the transcribed text into other apps.
 
-The menu-bar icon turns orange until the hotkey permissions are granted — hover
-it to see which one is still missing. zwisp watches for the grant and starts
-working within a couple of seconds — no relaunch needed; each Setup row deep-
-links straight to the right System Settings pane.
+Each row deep-links straight to the right System Settings pane, and zwisp
+notices a grant within a couple of seconds — no relaunch needed.
 
-Setup downloads the speech model from Hugging Face for you (the default
-`large-v3-turbo` is ~1.5 GB; lighter models are much smaller — see
-[Configuration](#configuration)), showing progress as it goes. That's the only
-download dictation needs; afterwards it runs fully offline. Want AI cleanup too?
-The optional **AI cleanup** step downloads its model (~2.5 GB, verified against
-a pinned checksum before it's ever served) — the engine itself already ships
-inside the app.
+Setup also downloads the models: the speech model (~1.5 GB; lighter options in
+[Configuration](#configuration)) is the only download dictation needs —
+afterwards everything runs offline. The optional **AI cleanup** step adds its
+model (~2.5 GB, checksum-verified); the engine itself already ships inside the
+app.
 
 ## Usage
 
@@ -140,10 +121,9 @@ inside the app.
 | ⚪ Grey | Transcribing a dictation you just finished. |
 | 🟠 Orange | Permissions missing — hover the icon to see which, then **Open zwisp…** → Setup. See [First-run setup](#first-run-setup-one-time). |
 
-While you're recording, zwisp's own icon doesn't change: macOS shows its
-orange microphone indicator in the menu bar whenever the mic is live, and
-that's the recording signal. Hovering the zwisp icon shows the current state
-in words.
+While you're recording, zwisp's own icon doesn't change — macOS's orange
+microphone indicator is the recording signal. Hover the icon to see the current
+state in words.
 
 ### Changing hotkeys
 
@@ -174,12 +154,9 @@ cleanup is off — fixing casing ("whisperkit" → "WhisperKit"), split words
 ("whisper kit" → "WhisperKit"), and close mishearings ("zeedo" → "Ziedo").
 
 That corrector is deliberately timid, because a wrong "correction" is worse than
-a missed one: short entries only get casing and split-word fixes, never fuzzy
-ones (at four letters, a single edit turns "data" into "Dana"), and a word that
-already spells another dictionary entry is never rewritten into a near
-neighbour. Longer entries — a full name, say — tolerate more, so "zeddo solomon"
-still lands on "Ziedo Solomon". Entries are short terms, at most 4 words, and
-everything stays on your Mac.
+a missed one: short entries never fuzzy-match (at four letters, a single edit
+turns "data" into "Dana"), while longer ones — a full name, say — tolerate more,
+so "zeddo solomon" still lands on "Ziedo Solomon". Everything stays on your Mac.
 
 ### Per-app writing styles
 
