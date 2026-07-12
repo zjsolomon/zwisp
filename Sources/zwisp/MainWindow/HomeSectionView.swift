@@ -48,7 +48,7 @@ struct HomeSectionView: View {
                 statTile(value: "\(home.todayStats.dictations)", label: "Dictations today")
                 statTile(value: "\(home.todayStats.words)", label: "Words today")
                 statTile(value: "\(home.lifetimeStats.dictations)", label: "All time")
-                statTile(value: averageSpeed, label: "Avg speed")
+                statTile(value: averageWordsPerMinute, label: "Avg words/min")
             }
 
             Text("Counts only — zwisp never stores what you said.")
@@ -99,9 +99,9 @@ struct HomeSectionView: View {
         }
     }
 
-    private var averageSpeed: String {
-        let avg = home.lifetimeStats.averageTotalSeconds
-        return avg > 0 ? String(format: "%.1fs", avg) : "—"
+    private var averageWordsPerMinute: String {
+        let wpm = home.lifetimeStats.wordsPerMinute
+        return wpm > 0 ? String(format: "%.0f", wpm) : "—"
     }
 
     // MARK: - Cards

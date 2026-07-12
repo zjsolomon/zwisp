@@ -459,8 +459,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Log.write("dictionary corrected '\(correction.original)' → '\(correction.replacement)'")
         }
         await finishJob(injecting: corrected.text, targetPID: targetPID,
-                        timings: DictationTimings(transcribeSeconds: transcribeSeconds,
-                                                  cleanupSeconds: cleanupSeconds))
+                        timings: DictationTimings(
+                            transcribeSeconds: transcribeSeconds,
+                            cleanupSeconds: cleanupSeconds,
+                            // Spoken time, for the dashboard's words-per-minute.
+                            audioSeconds: Double(samples.count) / config.audio.sampleRate))
     }
 
     /// Streamed transcription when the worker confirmed audio during the hold

@@ -15,12 +15,17 @@ import Foundation
 public struct DictationTimings: Equatable, Sendable {
     public var transcribeSeconds: Double
     public var cleanupSeconds: Double
+    /// Seconds of microphone audio the dictation captured — speaking time, not
+    /// processing time. The denominator of words-per-minute.
+    public var audioSeconds: Double
     /// End-to-end wall time attributed to this dictation.
     public var totalSeconds: Double { transcribeSeconds + cleanupSeconds }
 
-    public init(transcribeSeconds: Double, cleanupSeconds: Double) {
+    public init(transcribeSeconds: Double, cleanupSeconds: Double,
+                audioSeconds: Double = 0) {
         self.transcribeSeconds = transcribeSeconds
         self.cleanupSeconds = cleanupSeconds
+        self.audioSeconds = audioSeconds
     }
 }
 
@@ -34,16 +39,47 @@ public struct StatsAggregate: Codable, Equatable, Sendable {
     /// `dictations == 0`. Stored rather than derived so a decoded snapshot is
     /// display-ready without recomputation.
     public var averageTotalSeconds: Double
+    /// Total spoken-audio seconds, and the words from exactly those dictations.
+    /// `audioWords` is tracked separately from `words` so the words-per-minute
+    /// numerator always matches its denominator: dictations recorded before
+    /// audio durations existed count words but no audio, and mixing them in
+    /// would inflate the rate.
+    public var audioSeconds: Double
+    public var audioWords: Int
+
+    /// Mean dictation speed in words per spoken minute; 0 until at least one
+    /// dictation recorded an audio duration.
+    public var wordsPerMinute: Double {
+        guard audioSeconds > 0 else { return 0 }
+        return Double(audioWords) / (audioSeconds / 60)
+    }
 
     /// Memberwise, all-zero by default — so `StatsAggregate()` is the empty value.
     public init(dictations: Int = 0, words: Int = 0,
                 transcribeSeconds: Double = 0, cleanupSeconds: Double = 0,
-                averageTotalSeconds: Double = 0) {
+                averageTotalSeconds: Double = 0,
+                audioSeconds: Double = 0, audioWords: Int = 0) {
         self.dictations = dictations
         self.words = words
         self.transcribeSeconds = transcribeSeconds
         self.cleanupSeconds = cleanupSeconds
         self.averageTotalSeconds = averageTotalSeconds
+        self.audioSeconds = audioSeconds
+        self.audioWords = audioWords
+    }
+
+    /// Tolerant decoding: the audio fields were added after snapshots already
+    /// existed on disk, so they default to 0 instead of failing the whole file
+    /// (a decode failure would silently reset the user's stats — see `load`).
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        dictations = try container.decode(Int.self, forKey: .dictations)
+        words = try container.decode(Int.self, forKey: .words)
+        transcribeSeconds = try container.decode(Double.self, forKey: .transcribeSeconds)
+        cleanupSeconds = try container.decode(Double.self, forKey: .cleanupSeconds)
+        averageTotalSeconds = try container.decode(Double.self, forKey: .averageTotalSeconds)
+        audioSeconds = try container.decodeIfPresent(Double.self, forKey: .audioSeconds) ?? 0
+        audioWords = try container.decodeIfPresent(Int.self, forKey: .audioWords) ?? 0
     }
 
     /// Folds one dictation into the totals, keeping `averageTotalSeconds` in
@@ -54,6 +90,10 @@ public struct StatsAggregate: Codable, Equatable, Sendable {
         transcribeSeconds += timings.transcribeSeconds
         cleanupSeconds += timings.cleanupSeconds
         averageTotalSeconds = (transcribeSeconds + cleanupSeconds) / Double(dictations)
+        if timings.audioSeconds > 0 {
+            audioSeconds += timings.audioSeconds
+            audioWords += wordCount
+        }
     }
 }
 

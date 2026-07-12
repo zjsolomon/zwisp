@@ -133,4 +133,57 @@ struct StatsStoreTests {
         store.record(wordCount: 1, timings: timings(2.0, 2.0))
         #expect(store.lifetime.averageTotalSeconds == 4.0)
     }
+
+    // MARK: - Words per minute
+
+    @Test func wordsPerMinuteDividesAudioWordsBySpokenMinutes() {
+        let store = StatsStore(fileURL: tempURL())
+        // 30 words over 10s + 20 words over 10s = 50 words / (20s / 60) = 150 wpm.
+        store.record(wordCount: 30, timings: DictationTimings(
+            transcribeSeconds: 1, cleanupSeconds: 1, audioSeconds: 10))
+        store.record(wordCount: 20, timings: DictationTimings(
+            transcribeSeconds: 1, cleanupSeconds: 1, audioSeconds: 10))
+        #expect(store.lifetime.wordsPerMinute == 150)
+    }
+
+    @Test func wordsPerMinuteIsZeroWithoutAnyAudioDuration() {
+        #expect(StatsAggregate().wordsPerMinute == 0)
+
+        // Dictations without an audio duration (the pre-WPM format) never
+        // produce a rate — no denominator, no number.
+        let store = StatsStore(fileURL: tempURL())
+        store.record(wordCount: 100, timings: timings(1.0, 1.0))
+        #expect(store.lifetime.wordsPerMinute == 0)
+    }
+
+    @Test func audiolessDictationsDoNotInflateWordsPerMinute() {
+        let store = StatsStore(fileURL: tempURL())
+        // An old-style record (no audio) followed by a timed one: the rate
+        // must reflect only the timed dictation's words — 30 words over 15s
+        // = 120 wpm, not 130 words over 15s.
+        store.record(wordCount: 100, timings: timings(1.0, 1.0))
+        store.record(wordCount: 30, timings: DictationTimings(
+            transcribeSeconds: 1, cleanupSeconds: 1, audioSeconds: 15))
+        #expect(store.lifetime.wordsPerMinute == 120)
+        #expect(store.lifetime.words == 130)   // the plain word count still counts both
+    }
+
+    @Test func snapshotsFromBeforeTheAudioFieldsStillDecode() throws {
+        // A stats.json written before audioSeconds/audioWords existed must
+        // load intact — a decode failure would silently reset the user's stats.
+        let url = tempURL()
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        let legacy = """
+        {"version":1,"days":{},"lifetime":{"dictations":8,"words":200,
+         "transcribeSeconds":10,"cleanupSeconds":6,"averageTotalSeconds":2}}
+        """
+        try Data(legacy.utf8).write(to: url)
+
+        let store = StatsStore(fileURL: url)
+        #expect(store.lifetime.dictations == 8)
+        #expect(store.lifetime.words == 200)
+        #expect(store.lifetime.audioSeconds == 0)
+        #expect(store.lifetime.wordsPerMinute == 0)
+    }
 }
