@@ -15,6 +15,17 @@ leaves the machine. Apple Silicon, macOS 14+, Swift 5.9+.
 premium presentation matters, but the repo does not solicit issues/PRs and must never
 read as a "portfolio piece" out loud. Keep README copy in a confident product voice.
 
+**Distribution:** zwisp is **free** (MIT) and the first program from **Homebird**
+(homebirdlabs.com). Homebird is a separate, private launcher repo (`zjsolomon/homebird`) that
+installs and updates programs from their GitHub Releases. Homebird is **optional**: every release
+here carries two notarized files, both built by `release.sh`:
+- `zwisp.dmg`, the direct download, linked as `homebirdlabs.com/zwisp/download`;
+- `zwisp-<v>.zip`, which Homebird installs. Its SHA-256 and size are pinned in Homebird's
+  `catalog.json`, so re-uploading it breaks Homebird's install until the catalog is updated.
+
+Everything is signed with the owner's Developer ID (team `F8CJ6Z76H7`) and notarized.
+Building from source (`./install.sh`) remains supported.
+
 ## Build & test
 
 ```bash
@@ -22,8 +33,11 @@ swift test              # FAST: runs ZwispCore unit tests only (no WhisperKit/Co
 swift build             # Full app build; compiles WhisperKit — slow.
 ./build-app.sh [release|debug]   # Builds + wraps binary in zwisp.app (incl. the pinned llama-server, fetched+cached) + code-signs it.
 ./install.sh            # build-app.sh release, then copies to /Applications and launches.
-./release.sh [--publish] # build-app.sh release → dist/zwisp-<v>.zip + the catalog fields Homebird needs;
-                        # --publish uploads it as GitHub release v<v>. Version comes from Info.plist.
+./release.sh [--publish] # build-app.sh release → notarize + staple → dist/zwisp-<v>.zip (for Homebird, prints
+                        # its catalog fields) + dist/zwisp.dmg (direct download, via build-dmg.sh);
+                        # --publish uploads both as GitHub release v<v>. Version comes from Info.plist.
+./build-dmg.sh [--no-notarize]  # package the already-stapled zwisp.app into a branded, notarized dist/zwisp.dmg.
+                        # Always named zwisp.dmg: homebirdlabs.com/zwisp/download → releases/latest/download/zwisp.dmg.
 ```
 
 - **Prefer `swift test` for iterating.** It only compiles `ZwispCore` + its tests, so it's

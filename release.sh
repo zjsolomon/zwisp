@@ -1,8 +1,11 @@
 #!/bin/bash
-# Builds a release zwisp.app, notarizes it, and zips it for Homebird to install.
+# Builds a release zwisp.app, notarizes it, and packages it two ways:
+#   dist/zwisp-<v>.zip  for Homebird to install (its catalog pins this file's hash)
+#   dist/zwisp.dmg      for downloading directly (build-dmg.sh), always named zwisp.dmg so
+#                       releases/latest/download/zwisp.dmg is a stable link
 #
-#   ./release.sh            # version from Info.plist → dist/zwisp-<v>.zip + catalog entry
-#   ./release.sh --publish  # …and uploads it as GitHub release v<v> on zjsolomon/zwisp
+#   ./release.sh            # version from Info.plist → both files + the catalog entry
+#   ./release.sh --publish  # …and uploads both as GitHub release v<v> on zjsolomon/zwisp
 #
 # Notarization needs the Developer ID Application certificate in the keychain
 # and the notarytool credentials saved once as the "homebird-notary" profile:
@@ -55,14 +58,17 @@ zip_app
 SHA=$(shasum -a 256 "$ZIP" | awk '{print $1}')
 SIZE=$(stat -f %z "$ZIP")
 
+[ "$NOTARIZED" = 1 ] && ./build-dmg.sh
+
 if [ "$PUBLISH" = 1 ]; then
     if [ "$NOTARIZED" != 1 ]; then
         echo "==> Refusing to publish an app that isn't notarized." >&2
         exit 1
     fi
     echo "==> Publishing GitHub release v${VERSION}…"
-    gh release create "v${VERSION}" "$ZIP" --repo zjsolomon/zwisp \
-        --title "zwisp ${VERSION}" --notes "zwisp ${VERSION}. Install it with Homebird."
+    gh release create "v${VERSION}" "$ZIP" dist/zwisp.dmg --repo zjsolomon/zwisp \
+        --title "zwisp ${VERSION}" \
+        --notes "zwisp ${VERSION}, signed and notarized. Download zwisp.dmg, or install and update it with Homebird (homebirdlabs.com)."
 fi
 
 cat <<EOF

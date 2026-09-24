@@ -16,8 +16,11 @@ access is a one-time download of the models.
 
 ## Quick start
 
-**Easiest:** install [Homebird](https://homebirdlabs.com), then install zwisp from its
-Marketplace. It's free, signed and notarized by Apple, and Homebird keeps it up to date.
+**Download:** [**zwisp.dmg**](https://homebirdlabs.com/zwisp/download). Open it and drag zwisp
+into Applications. It's free, and signed and notarized by Apple, so it opens without warnings.
+
+**Or through [Homebird](https://homebirdlabs.com)** (optional): install zwisp from Homebird's
+Marketplace and it keeps zwisp up to date for you.
 
 **Or build from source:**
 
