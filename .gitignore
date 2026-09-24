@@ -7,3 +7,4 @@ zwisp.app/
 
 # Claude Code worktrees / local session state
 .claude/
+dist/

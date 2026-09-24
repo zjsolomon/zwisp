@@ -22,6 +22,8 @@ swift test              # FAST: runs ZwispCore unit tests only (no WhisperKit/Co
 swift build             # Full app build; compiles WhisperKit — slow.
 ./build-app.sh [release|debug]   # Builds + wraps binary in zwisp.app (incl. the pinned llama-server, fetched+cached) + code-signs it.
 ./install.sh            # build-app.sh release, then copies to /Applications and launches.
+./release.sh [--publish] # build-app.sh release → dist/zwisp-<v>.zip + the catalog fields Homebird needs;
+                        # --publish uploads it as GitHub release v<v>. Version comes from Info.plist.
 ```
 
 - **Prefer `swift test` for iterating.** It only compiles `ZwispCore` + its tests, so it's
