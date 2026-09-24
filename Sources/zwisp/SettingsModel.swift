@@ -32,6 +32,7 @@ final class SettingsModel {
     private(set) var dictionaryAliases: [String: [String]] = [:]
     private(set) var rules: [AppStyleRule] = []
     private(set) var defaultStyle: WritingStyle = .standard
+    private(set) var perAppStylesEnabled: Bool = true
     private(set) var cleanupEnabled: Bool = false
     /// The one bundled cleanup model's display name (static — no picker).
     private(set) var cleanupModelName: String = ""
@@ -80,6 +81,7 @@ final class SettingsModel {
         })
         rules = styleRuleStore.rules
         defaultStyle = styleRuleStore.defaultStyle
+        perAppStylesEnabled = styleRuleStore.perAppEnabled
         cleanupEnabled = cleanup.enabled
         cleanupModelName = cleanup.modelName
         speechModelName = SpeechModelLayout.displayName(variant: config.whisperModel)
@@ -199,6 +201,22 @@ final class SettingsModel {
         snapshot()
     }
 
+    func setPerAppStylesEnabled(_ enabled: Bool) {
+        styleRuleStore.perAppEnabled = enabled
+        actions.stylesChanged()
+        snapshot()
+    }
+
+    /// Re-adds any built-in rule the user removed (their other rules and edits
+    /// are untouched). Returns how many came back, for the confirmation line.
+    @discardableResult
+    func restoreBuiltInRules() -> Int {
+        let added = styleRuleStore.addMissingBuiltInRules()
+        if added > 0 { actions.stylesChanged() }
+        snapshot()
+        return added
+    }
+
     /// Adds a rule. Returns `false` on a duplicate `(bundleID, titleContains)`
     /// target so the view can flag it.
     @discardableResult
@@ -242,6 +260,7 @@ final class SettingsModel {
 
     /// Currently-running regular (Dock-visible) apps, deduped by bundle ID and
     /// sorted by name — the quick-pick source for a new rule.
+    /// Pickable rule targets: "Any web browser" first, then the running apps.
     func runningApps() -> [(name: String, bundleID: String)] {
         var seen = Set<String>()
         var result: [(name: String, bundleID: String)] = []
@@ -252,7 +271,8 @@ final class SettingsModel {
             let name = app.localizedName ?? bundleID
             result.append((name: name, bundleID: bundleID))
         }
-        return result.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        result.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        return [(name: AppStyleRule.anyBrowserName, bundleID: AppStyleRule.anyBrowserBundleID)] + result
     }
 
     /// Presents an open panel rooted at /Applications so the user can pick an

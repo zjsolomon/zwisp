@@ -165,6 +165,14 @@ layer should stay a thin glue layer.
   re-attempt Services without new evidence (also beware: macOS Sequoia's window tiling
   claimed most ⌃⌥⌘ shortcut combos, and Services can't tell left/right modifiers apart).
 - **Per-app writing styles** steer cleanup into `.standard`/`.formal`/`.casual` per frontmost app.
+  `StyleRuleStore.perAppEnabled` (absent → on) is the master toggle: off → every dictation
+  uses `defaultStyle` and no window title is read. Every install is **seeded once** with
+  `StyleRuleStore.builtInRules` (~26: mail/docs apps → formal, chat apps → casual, plus the
+  same services in a browser tab) via `seedBuiltInRulesIfNeeded()` at launch — a flag, so
+  deletions stick; "Restore Built-in Rules" (`addMissingBuiltInRules`) re-adds only what's
+  missing. Browser-tab rules use the **`AppStyleRule.anyBrowserBundleID` sentinel**
+  ("Any web browser"), which `StyleResolver` expands to `browserBundleIDs` (Safari, Chrome,
+  Edge, Firefox, Arc, Brave, …); a rule naming the specific browser always beats it.
   All steering is in the cleanup *system* prompt: the style `promptBlock` is appended **LAST**
   (after the base prompt and the dictionary block) so the server's longest-common-prefix KV reuse
   reprefills only the short style suffix on a switch — keep that ordering in

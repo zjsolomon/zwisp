@@ -73,4 +73,50 @@ struct StyleResolverTests {
         #expect(resolve("com.apple.Safari", "My Gmail", [gmail, mail]) == .formal)
         #expect(resolve("com.apple.Safari", "My Gmail", [mail, gmail]) == .casual)
     }
+
+    // MARK: - Any-browser rules
+
+    private let gmailAnywhere = AppStyleRule.anyBrowser(titleContains: "Gmail", style: .formal)
+
+    @Test func anyBrowserTitleRuleMatchesEveryKnownBrowser() {
+        for browser in ["com.apple.Safari", "com.google.Chrome", "com.microsoft.edgemac",
+                        "org.mozilla.firefox", "company.thebrowser.Browser", "com.brave.Browser"] {
+            #expect(resolve(browser, "Inbox - Gmail", [gmailAnywhere]) == .formal,
+                    "expected \(browser) to count as a browser")
+        }
+    }
+
+    @Test func anyBrowserRuleIgnoresNonBrowsers() {
+        // A Mail window mentioning Gmail is not a browser tab.
+        #expect(resolve("com.apple.mail", "Gmail settings", [gmailAnywhere]) == .standard)
+        // And the sentinel is never matched as a literal bundle ID.
+        #expect(resolve(AppStyleRule.anyBrowserBundleID, "Gmail", [gmailAnywhere]) == .standard)
+    }
+
+    @Test func appSpecificRuleBeatsAnyBrowserRule() {
+        // The user's own Safari rule wins over the generic one, whatever the
+        // order — both for title rules…
+        let safariGmail = AppStyleRule(bundleID: "com.apple.Safari", appName: "Safari",
+                                       titleContains: "Gmail", style: .casual)
+        #expect(resolve("com.apple.Safari", "Inbox - Gmail", [gmailAnywhere, safariGmail]) == .casual)
+        #expect(resolve("com.apple.Safari", "Inbox - Gmail", [safariGmail, gmailAnywhere]) == .casual)
+        // …and for bare rules.
+        let safariBare = AppStyleRule(bundleID: "com.apple.Safari", appName: "Safari", style: .casual)
+        let browserBare = AppStyleRule(bundleID: AppStyleRule.anyBrowserBundleID,
+                                       appName: "Any", style: .formal)
+        #expect(resolve("com.apple.Safari", "News", [browserBare, safariBare]) == .casual)
+    }
+
+    @Test func anyBrowserTitleRuleBeatsAppBareRule() {
+        // Precedence is title-first across both groups: a Gmail tab in Safari
+        // is formal even though Safari has a bare casual rule.
+        let safariBare = AppStyleRule(bundleID: "com.apple.Safari", appName: "Safari", style: .casual)
+        #expect(resolve("com.apple.Safari", "Inbox - Gmail", [safariBare, gmailAnywhere]) == .formal)
+        #expect(resolve("com.apple.Safari", "News", [safariBare, gmailAnywhere]) == .casual)
+    }
+
+    @Test func browserSetIsCaseInsensitive() {
+        #expect(StyleResolver.isBrowser("COM.APPLE.SAFARI"))
+        #expect(!StyleResolver.isBrowser("com.apple.mail"))
+    }
 }

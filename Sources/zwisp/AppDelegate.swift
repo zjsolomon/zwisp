@@ -186,6 +186,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         cleanup.dictionaryProvider = { [weak self] in self?.dictionaryStore.entriesWithAliases ?? [] }
         Log.write("dictionary: \(dictionaryStore.entries.count) entries")
 
+        // Writing styles: every install starts with the built-in per-app rules
+        // (mail → formal, chat → casual). Seeded once; deletions stick.
+        let seeded = styleRuleStore.seedBuiltInRulesIfNeeded()
+        Log.write("writing styles: \(styleRuleStore.rules.count) rules"
+                  + (seeded > 0 ? " (\(seeded) built-in rules seeded)" : "")
+                  + (styleRuleStore.perAppEnabled ? "" : ", per-app rules off"))
+
         // No permission prompts at launch — the setup window owns them,
         // one user-initiated prompt per row instead of a dialog pile-up.
         // (Three SEPARATE permissions: Microphone to record, Input Monitoring
@@ -437,9 +444,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // cleanup can't type the result into whatever app the user switched to
         // in the meantime) and the writing style resolved from its bundle ID +
         // focused-window title. Resolving here freezes the style against a focus
-        // change during transcription. (`resolve` returns `.standard` when there
-        // are no rules / no match, so the default setup pays only a cheap AX
-        // read and no style block is added.)
+        // change during transcription. (`resolve` returns the default style
+        // when per-app rules are off or nothing matches, so a plain setup pays
+        // only a cheap AX read and no style block is added.)
         let context = FrontmostContext.capture()
         let targetPID = context.pid
         let style = styleRuleStore.resolve(bundleID: context.bundleID,
@@ -631,13 +638,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Writing styles
 
-    /// The writing style for the current frontmost app. Short-circuits to
-    /// `.standard` — with NO Accessibility/`FrontmostContext` call — when the
-    /// user has no rules and the default is standard, so the default setup never
-    /// pays for a window-title read on every app switch.
+    /// The writing style for the current frontmost app. Short-circuits to the
+    /// default style — with NO Accessibility/`FrontmostContext` call — when
+    /// per-app rules are off or there are none, so those setups never pay for
+    /// a window-title read on every app switch.
     private func currentResolvedStyle() -> WritingStyle {
-        if styleRuleStore.rules.isEmpty, styleRuleStore.defaultStyle == .standard {
-            return .standard
+        if !styleRuleStore.perAppEnabled || styleRuleStore.rules.isEmpty {
+            return styleRuleStore.defaultStyle
         }
         let context = FrontmostContext.capture()
         return styleRuleStore.resolve(bundleID: context.bundleID,

@@ -7,6 +7,8 @@ import ZwispCore
 struct StylesSectionView: View {
     let model: SettingsModel
     @State private var showingAddRule = false
+    /// Feedback line under the rule list after "Restore built-in rules".
+    @State private var restoreNote: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.spaceXL) {
@@ -15,16 +17,27 @@ struct StylesSectionView: View {
                                     + "the text is going.")
 
             Card {
-                SettingRow(title: "Default style") {
-                    Picker("", selection: Binding(
-                        get: { model.defaultStyle },
-                        set: { model.setDefaultStyle($0) })) {
-                        ForEach(WritingStyle.allCases, id: \.self) { style in
-                            Text(style.displayName).tag(style)
+                VStack(alignment: .leading, spacing: 0) {
+                    SettingRow(title: "Default style",
+                               caption: model.perAppStylesEnabled
+                                   ? "Used wherever no rule below matches."
+                                   : "Used for every dictation.",
+                               showsDivider: true) {
+                        Picker("", selection: Binding(
+                            get: { model.defaultStyle },
+                            set: { model.setDefaultStyle($0) })) {
+                            ForEach(WritingStyle.allCases, id: \.self) { style in
+                                Text(style.displayName).tag(style)
+                            }
                         }
+                        .labelsHidden()
+                        .fixedSize()
                     }
-                    .labelsHidden()
-                    .fixedSize()
+                    ToggleRow(title: "Per-app rules",
+                              caption: "Pick a style by the app in front — and by the tab, in a browser.",
+                              isOn: Binding(
+                                get: { model.perAppStylesEnabled },
+                                set: { model.setPerAppStylesEnabled($0) }))
                 }
             }
 
@@ -35,7 +48,7 @@ struct StylesSectionView: View {
                         .foregroundStyle(Theme.textPrimary)
                         .padding(.bottom, Theme.spaceXS)
                     if model.rules.isEmpty {
-                        Text("No rules yet — add one to override the default for a specific app.")
+                        Text("No rules — add one, or restore the built-in set.")
                             .font(Theme.body)
                             .foregroundStyle(Theme.textSecondary)
                             .padding(.vertical, 10)
@@ -43,15 +56,32 @@ struct StylesSectionView: View {
                     ForEach(model.rules) { rule in
                         RuleRow(model: model, rule: rule)
                     }
-                    Button("Add Rule…") { showingAddRule = true }
-                        .buttonStyle(PrimaryButtonStyle())
-                        .padding(.top, Theme.spaceM)
-                    Text("Example: Safari with title containing \u{201C}Gmail\u{201D} \u{2192} "
-                         + "Formal applies only in Gmail tabs.")
+                    HStack(spacing: Theme.spaceM) {
+                        Button("Add Rule…") { showingAddRule = true }
+                            .buttonStyle(PrimaryButtonStyle())
+                        Button("Restore Built-in Rules") {
+                            let added = model.restoreBuiltInRules()
+                            restoreNote = added == 0
+                                ? "All built-in rules are already in the list."
+                                : "Restored \(added) built-in rule\(added == 1 ? "" : "s")."
+                        }
+                        .buttonStyle(SecondaryButtonStyle())
+                        if let restoreNote {
+                            Text(restoreNote)
+                                .font(Theme.caption)
+                                .foregroundStyle(Theme.textSecondary)
+                        }
+                    }
+                    .padding(.top, Theme.spaceM)
+                    Text("\u{201C}\(AppStyleRule.anyBrowserName)\u{201D} rules match the tab title in "
+                         + "\(StyleResolver.browserNamesSummary). A rule for a specific browser "
+                         + "wins over them. Restoring only adds what you removed.")
                         .font(Theme.caption)
                         .foregroundStyle(Theme.textTertiary)
                         .padding(.top, Theme.spaceM)
                 }
+                .opacity(model.perAppStylesEnabled ? 1 : 0.45)
+                .disabled(!model.perAppStylesEnabled)
             }
         }
         .sheet(isPresented: $showingAddRule) {
@@ -60,8 +90,9 @@ struct StylesSectionView: View {
     }
 }
 
-/// One editable rule row: app name + bundle ID, a "window title contains" field
-/// (commits on Return or focus loss), a style picker, and a remove button.
+/// One editable rule row, on a single line: app name + bundle ID, the "window
+/// title contains" field (commits on Return or focus loss), a style picker, and
+/// a remove button. Compact on purpose — the built-in set alone is ~25 rows.
 private struct RuleRow: View {
     let model: SettingsModel
     let rule: AppStyleRule
@@ -85,34 +116,21 @@ private struct RuleRow: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Theme.spaceS) {
-            HStack(spacing: Theme.spaceM) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(rule.appName)
-                        .font(Theme.body)
-                        .foregroundStyle(Theme.textPrimary)
-                    Text(rule.bundleID)
-                        .font(Theme.caption)
-                        .foregroundStyle(Theme.textSecondary)
-                }
-                Spacer()
-                Picker("", selection: Binding(
-                    get: { rule.style },
-                    set: { style in
-                        var updated = rule
-                        updated.style = style
-                        model.updateRule(updated)
-                    })) {
-                    ForEach(WritingStyle.allCases, id: \.self) { style in
-                        Text(style.displayName).tag(style)
-                    }
-                }
-                .labelsHidden()
-                .fixedSize()
-                Button("Remove") { model.removeRule(id: rule.id) }
-                    .buttonStyle(SecondaryButtonStyle())
+        HStack(alignment: .center, spacing: Theme.spaceM) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(rule.isAnyBrowser ? AppStyleRule.anyBrowserName : rule.appName)
+                    .font(Theme.body)
+                    .foregroundStyle(Theme.textPrimary)
+                    .lineLimit(1)
+                Text(rule.isAnyBrowser ? "by tab title" : rule.bundleID)
+                    .font(Theme.caption)
+                    .foregroundStyle(Theme.textSecondary)
+                    .lineLimit(1)
             }
-            TextField("When window title contains (optional)", text: $titleText)
+            .frame(minWidth: 150, alignment: .leading)
+            Spacer(minLength: Theme.spaceS)
+            TextField(rule.isAnyBrowser ? "Tab title contains" : "Window title contains (optional)",
+                      text: $titleText)
                 .textFieldStyle(.plain)
                 .font(Theme.caption)
                 .foregroundStyle(Theme.textPrimary)
@@ -120,11 +138,28 @@ private struct RuleRow: View {
                 .padding(.vertical, 6)
                 .background(Theme.surfaceRaised)
                 .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .frame(width: 190)
                 .focused($titleFocused)
                 .onSubmit(commitTitle)
                 .onChange(of: titleFocused) { if !titleFocused { commitTitle() } }
+            Picker("", selection: Binding(
+                get: { rule.style },
+                set: { style in
+                    var updated = rule
+                    updated.style = style
+                    model.updateRule(updated)
+                })) {
+                ForEach(WritingStyle.allCases, id: \.self) { style in
+                    Text(style.displayName).tag(style)
+                }
+            }
+            .labelsHidden()
+            .fixedSize()
+            Button("Remove") { model.removeRule(id: rule.id) }
+                .buttonStyle(SecondaryButtonStyle())
+                .fixedSize()
         }
-        .padding(.vertical, 10)
+        .padding(.vertical, 8)
         .overlay(alignment: .bottom) {
             Rectangle().fill(Theme.hairline).frame(height: Theme.hairlineWidth)
         }
