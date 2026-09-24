@@ -9,6 +9,14 @@ struct OnboardingStateTests {
         OnboardingState(microphone: mic, inputMonitoring: input, accessibility: ax)
     }
 
+    @Test func newlyGrantedListsOnlyTheFlipsInChecklistOrder() {
+        let before = OnboardingState(microphone: .granted, inputMonitoring: .notGranted, accessibility: .denied)
+        let after = OnboardingState(microphone: .granted, inputMonitoring: .granted, accessibility: .granted)
+        #expect(after.newlyGranted(since: before) == [.inputMonitoring, .accessibility])
+        #expect(after.newlyGranted(since: after).isEmpty)
+        #expect(before.newlyGranted(since: after).isEmpty)   // revocation isn't a grant
+    }
+
     @Test func allGrantedOnlyWhenAllThreeAreGranted() {
         #expect(state().allGranted)
         #expect(!state(mic: .notGranted).allGranted)

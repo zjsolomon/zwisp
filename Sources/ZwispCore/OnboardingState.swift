@@ -68,6 +68,15 @@ public struct OnboardingState: Equatable {
         }
     }
 
+    /// Permissions granted now that weren't in `previous`, in checklist order.
+    /// Drives the Setup window pulling itself back to the front: a grant in
+    /// System Settings leaves focus with whichever regular app macOS picks.
+    public func newlyGranted(since previous: OnboardingState) -> [OnboardingPermission] {
+        OnboardingPermission.allCases.filter {
+            status(of: $0) == .granted && previous.status(of: $0) != .granted
+        }
+    }
+
     public var allGranted: Bool {
         OnboardingPermission.allCases.allSatisfy { status(of: $0) == .granted }
     }

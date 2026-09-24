@@ -41,6 +41,10 @@ final class SetupModel {
     /// granted (that path arms the hotkey monitor separately).
     private var wasAllGranted: Bool
 
+    /// Called when any single permission flips to granted (e.g. in System
+    /// Settings), so the window can bring itself back to the front.
+    @ObservationIgnored var onPermissionGranted: (() -> Void)?
+
     init(probe: PermissionProbe, hotkeyStore: HotkeyStore,
          speechInstaller: SpeechModelInstaller, cleanupInstaller: CleanupModelInstaller,
          cleanup: CleanupService, config: Configuration, actions: MainWindow.Actions) {
@@ -86,6 +90,7 @@ final class SetupModel {
     /// message. Safe to call at any time (e.g. from `MainWindow.refresh()`
     /// via an installer's `onPhaseChange`).
     func refresh() {
+        let previous = permissions
         permissions = probe.state()
         speechPhase = speechInstaller.phase
         speechHint = speechInstaller.phaseHint
@@ -93,7 +98,7 @@ final class SetupModel {
         cleanupModelName = cleanup.modelName
         readyMessage = OnboardingState.readyMessage(
             hotkeyNames: hotkeyStore.hotkeys.map(\.name))
-        detectRisingEdge()
+        detectGrants(since: previous)
     }
 
     /// One poll-timer tick. Permissions are cheap non-prompting reads so they
@@ -109,15 +114,21 @@ final class SetupModel {
     }
 
     private func refreshPermissions() {
+        let previous = permissions
         permissions = probe.state()
         readyMessage = OnboardingState.readyMessage(
             hotkeyNames: hotkeyStore.hotkeys.map(\.name))
-        detectRisingEdge()
+        detectGrants(since: previous)
     }
 
-    /// Fire `permissionsGranted` on the false→true edge so the app can re-arm the
-    /// hotkey tap immediately — preserved invariant from the old onboarding.
-    private func detectRisingEdge() {
+    /// Fire `onPermissionGranted` for any single new grant, and
+    /// `permissionsGranted` on the all-granted false→true edge so the app can
+    /// re-arm the hotkey tap immediately — preserved invariant from the old
+    /// onboarding.
+    private func detectGrants(since previous: OnboardingState) {
+        if !permissions.newlyGranted(since: previous).isEmpty {
+            onPermissionGranted?()
+        }
         let now = permissions.allGranted
         if now && !wasAllGranted {
             actions.permissionsGranted()

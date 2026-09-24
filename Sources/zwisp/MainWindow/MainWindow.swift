@@ -64,6 +64,7 @@ final class MainWindow {
             editLearningStore: editLearningStore,
             statsStore: statsStore, waveFeed: waveFeed,
             levelProvider: levelProvider, config: config, actions: actions)
+        model.setup.onPermissionGranted = { [weak self] in self?.reclaimFocusOnSetup() }
     }
 
     deinit {
@@ -83,6 +84,16 @@ final class MainWindow {
         startRefreshTimer()
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
+    }
+
+    /// After a grant in System Settings, macOS hands focus to the most recent
+    /// regular app, not to us (we're an accessory app), so the Setup checklist
+    /// ends up behind something else. If it's on screen, bring it back.
+    private func reclaimFocusOnSetup() {
+        guard let window, window.isVisible, !window.isMiniaturized,
+              model.selection == .setup else { return }
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
     }
 
     /// Presents the window opened to a specific section (the launch auto-show
