@@ -279,8 +279,13 @@ layer should stay a thin glue layer.
   hides only when **`jobsInFlight == 0 && !isRecording`** (queued jobs keep it pulsing until the
   last drains; `!isRecording` yields the panel to a re-pressed hotkey). User toggle is
   `OverlayStore` ("overlayEnabled", absent → on), exposed in the window's Dictation section.
-- Signing: `build-app.sh` prefers a stable self-signed identity (`setup-signing.sh`) so grants
-  persist across rebuilds; falls back to ad-hoc, which may require re-granting Accessibility.
+- Signing: `build-app.sh` picks, in order, `ZWISP_SIGN_IDENTITY`, the owner's **Developer ID
+  Application** certificate (team `F8CJ6Z76H7`, the shipping identity: hardened runtime + timestamp +
+  `zwisp.entitlements`, which declares microphone access; used for dev builds too so there's one code
+  identity), the self-signed identity from `setup-signing.sh`, then ad-hoc. llama-server and its
+  dylibs are signed first with the same identity, so library validation passes on the shared Team ID.
+  `release.sh` notarizes + staples via the `homebird-notary` notarytool profile and refuses to
+  `--publish` an un-notarized build. Homebird only installs zwisp if it's signed by that team.
 
 ## Conventions
 

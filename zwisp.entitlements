@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Hardened-runtime entitlements for the Developer ID build (build-app.sh).
+         Not the App Sandbox: the app stays unsandboxed, which the global event
+         tap, synthetic typing and Accessibility access all require. -->
+    <!-- The hardened runtime blocks microphone access unless it is declared. -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+</dict>
+</plist>
