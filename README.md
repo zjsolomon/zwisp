@@ -16,14 +16,18 @@ access is a one-time download of the models.
 
 ## Quick start
 
+**Easiest:** install [Homebird](https://homebirdlabs.com), then install zwisp from its
+Marketplace. It's free, signed and notarized by Apple, and Homebird keeps it up to date.
+
+**Or build from source:**
+
 ```bash
 git clone https://github.com/zjsolomon/zwisp.git
 cd zwisp && ./install.sh    # builds, installs to /Applications, launches
 ```
 
-Needs an Apple Silicon Mac on macOS 14+ and a Swift toolchain
-(`xcode-select --install`). There's no notarized download yet — building from
-source is the whole install. macOS will then ask for a few one-time
+Building needs an Apple Silicon Mac on macOS 14+ and a Swift toolchain
+(`xcode-select --install`). Either way, macOS will then ask for a few one-time
 permissions — see [First-run setup](#first-run-setup-one-time). Once running,
 toggle **Launch at Login** from the menu-bar icon if you'd like it on every
 boot.
