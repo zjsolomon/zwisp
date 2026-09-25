@@ -93,15 +93,25 @@ final class CleanupModelInstaller {
 
         Task {
             do {
-                let delegate = DownloadProgressDelegate { [weak self] fraction in
-                    // Fires off-main on URLSession's delegate queue; hop + throttle.
-                    Task { @MainActor in
-                        guard let self else { return }
-                        guard self.gate.shouldEmit(fraction) else { return }
-                        self.setPhase(.installing(
-                            stage: "Downloading cleanup model", fraction: fraction))
+                // The async download API never calls a task delegate's
+                // didWriteData, so progress is read by polling the task's
+                // byte count (the delegate hands the task over when it's made).
+                let delegate = DownloadProgressDelegate()
+                let expectedSize = modelFile.byteSize
+                let poll = Task { @MainActor [weak self] in
+                    while !Task.isCancelled {
+                        if let self, let task = delegate.task, task.countOfBytesReceived > 0 {
+                            let total = task.countOfBytesExpectedToReceive > 0
+                                ? task.countOfBytesExpectedToReceive : expectedSize
+                            let fraction = Double(task.countOfBytesReceived) / Double(total)
+                            if self.gate.shouldEmit(fraction) {
+                                self.setPhase(.installing(stage: "Downloading cleanup model", fraction: fraction))
+                            }
+                        }
+                        try? await Task.sleep(for: .milliseconds(200))
                     }
                 }
+                defer { poll.cancel() }
                 let request = URLRequest(url: modelFile.downloadURL)
                 let (tempURL, response) = try await URLSession.shared.download(
                     for: request, delegate: delegate)
@@ -191,26 +201,16 @@ final class CleanupModelInstaller {
     }
 }
 
-/// Forwards `URLSessionDownloadTask` byte progress as a 0…1 fraction. A tiny
-/// task-specific delegate for `download(for:delegate:)`; the async call itself
-/// consumes the finished file, so `didFinishDownloadingTo` is a required no-op.
-private final class DownloadProgressDelegate: NSObject, URLSessionDownloadDelegate {
-    private let onProgress: @Sendable (Double) -> Void
+/// Hands over the download's task as soon as URLSession creates it, so its
+/// byte count can be polled for progress: `download(for:delegate:)` never
+/// delivers `didWriteData` to a task delegate (verified: zero calls).
+private final class DownloadProgressDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    private let lock = NSLock()
+    private var created: URLSessionTask?
 
-    init(onProgress: @escaping @Sendable (Double) -> Void) {
-        self.onProgress = onProgress
+    var task: URLSessionTask? { lock.withLock { created } }
+
+    func urlSession(_ session: URLSession, didCreateTask task: URLSessionTask) {
+        lock.withLock { created = task }
     }
-
-    func urlSession(_ session: URLSession,
-                    downloadTask: URLSessionDownloadTask,
-                    didWriteData bytesWritten: Int64,
-                    totalBytesWritten: Int64,
-                    totalBytesExpectedToWrite: Int64) {
-        guard totalBytesExpectedToWrite > 0 else { return }  // unknown length ⇒ indeterminate
-        onProgress(Double(totalBytesWritten) / Double(totalBytesExpectedToWrite))
-    }
-
-    func urlSession(_ session: URLSession,
-                    downloadTask: URLSessionDownloadTask,
-                    didFinishDownloadingTo location: URL) {}
 }
