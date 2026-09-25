@@ -99,6 +99,14 @@ layer should stay a thin glue layer.
 
 ## Gotchas
 
+- **The Neural Engine note (for Homebird's Active page).** After the speech model loads,
+  `AppDelegate` writes `~/Library/Application Support/homebird/neural-engine/com.local.zwisp.json`
+  (`NeuralEngineNote`: pid + the loaded model folder) and removes it on quit. Core ML models on
+  the Neural Engine sit in wired memory macOS attributes to no process, and the files aren't kept
+  open, so this note is how Homebird counts them; it sizes the folder on disk (Whisper turbo:
+  1563 MiB on disk vs ~1590 MiB wired, measured). Local only. If zwisp ever loads another
+  Core ML model, add it to the note.
+
 - **Three separate macOS permissions**, easy to confuse: **Microphone** (record), **Input
   Monitoring** (CGEventTap to *receive* the hotkey), **Accessibility** (to *type* text into
   other apps). **Launch no longer fires permission prompts** — they're user-initiated from

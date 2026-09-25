@@ -258,6 +258,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// the app that owns it.
     func applicationWillTerminate(_ notification: Notification) {
         llamaServer.terminate()
+        try? FileManager.default.removeItem(at: neuralEngineNoteURL)
+    }
+
+    private var neuralEngineNoteURL: URL {
+        NeuralEngineNote.url(bundleID: Bundle.main.bundleIdentifier ?? "com.local.zwisp")
+    }
+
+    /// Records the speech model now on the Neural Engine for Homebird's Active
+    /// page (see `NeuralEngineNote`). Best effort: zwisp works the same without it.
+    private func writeNeuralEngineNote(models: [URL]) {
+        let note = NeuralEngineNote(pid: ProcessInfo.processInfo.processIdentifier, models: models.map(\.path))
+        let url = neuralEngineNoteURL
+        do {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try JSONEncoder().encode(note).write(to: url, options: .atomic)
+        } catch {
+            Log.write("neural engine note: couldn't write \(url.path): \(error)")
+        }
     }
 
     /// Entry point for readying the speech model. Uses the on-disk copy if the
@@ -295,6 +313,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                      Date().timeIntervalSince(started)))
                     self.transcriber = t
                     self.modelReady = true
+                    self.writeNeuralEngineNote(models: [folder])
                     self.speechInstaller.markInstalled()
                     self.refreshState()
                 }
