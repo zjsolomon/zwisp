@@ -2,35 +2,32 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key>
-    <string>zwisp</string>
-    <key>CFBundleDisplayName</key>
-    <string>zwisp</string>
-    <key>CFBundleIdentifier</key>
-    <string>com.local.zwisp</string>
-    <key>CFBundleVersion</key>
-    <string>1</string>
-    <key>CFBundleShortVersionString</key>
-    <string>1.2</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>CFBundleExecutable</key>
-    <string>zwisp</string>
-    <key>CFBundleIconFile</key>
-    <string>AppIcon</string>
-    <key>LSMinimumSystemVersion</key>
-    <string>14.0</string>
-    <!-- Menu-bar only app: no Dock icon. -->
-    <key>LSUIElement</key>
-    <true/>
-    <!-- Required so macOS can prompt for microphone access. -->
-    <key>NSMicrophoneUsageDescription</key>
-    <string>zwisp records your voice while you hold your push-to-talk key and transcribes it on-device.</string>
-    <!-- Allow the local HTTP call to the Ollama cleanup server on localhost. -->
-    <key>NSAppTransportSecurity</key>
-    <dict>
-        <key>NSAllowsLocalNetworking</key>
-        <true/>
-    </dict>
+	<key>CFBundleDisplayName</key>
+	<string>zwisp</string>
+	<key>CFBundleExecutable</key>
+	<string>zwisp</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.local.zwisp</string>
+	<key>CFBundleName</key>
+	<string>zwisp</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.3</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>zwisp records your voice while you hold your push-to-talk key and transcribes it on-device.</string>
 </dict>
 </plist>
