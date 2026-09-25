@@ -212,6 +212,17 @@ public struct Configuration {
                 self.sha256 = sha256
                 self.byteSize = byteSize
             }
+
+            /// Where to look for the model, in order: zwisp's own folder, then
+            /// Homebird's shared store (`homebird/models`), where zchat puts
+            /// it when zwisp isn't installed. Whichever is found, every app
+            /// maps that one file, so macOS keeps a single copy of the weights
+            /// in RAM; a second copy would cost another 2.5 GB. Downloads still
+            /// go to zwisp's own folder.
+            public func searchDirectories(applicationSupport: URL) -> [URL] {
+                [applicationSupport.appendingPathComponent("zwisp/models", isDirectory: true),
+                 applicationSupport.appendingPathComponent("homebird/models", isDirectory: true)]
+            }
         }
 
         // Prompt design notes (matter more than any single rule):

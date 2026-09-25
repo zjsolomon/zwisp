@@ -103,7 +103,7 @@ fi
 codesign --sign "$DEV_ID" --timestamp "$OUT_DMG"
 echo "==> Notarizing $OUT_DMG (usually a few minutes)…"
 OUT=$(xcrun notarytool submit "$OUT_DMG" --keychain-profile "$NOTARY_PROFILE" --wait 2>&1) || true
-echo "$OUT" | grep -E "^  (id|status):" | sed 's/^/  /' | sort -u
+echo "$OUT" | grep -E "^  (id|status):" | sed 's/^/  /' | sort -u || true   # no match must not end the script under pipefail
 if [[ "$OUT" != *"status: Accepted"* ]]; then
     ID=$(echo "$OUT" | awk '/^  id:/ {print $2; exit}')
     echo "==> Apple didn't accept the DMG. Its log:" >&2

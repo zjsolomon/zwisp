@@ -43,12 +43,18 @@ final class CleanupModelInstaller {
     /// handed to the server). Size is the cheap per-launch check; the SHA-256
     /// is verified once, right after download — hashing 2.5 GB on every
     /// launch would be pure waste.
+    ///
+    /// Also accepts the copy in Homebird's shared model store, where zchat
+    /// downloads it when zwisp isn't installed: using the same file means the
+    /// two apps share one copy of the weights in RAM (see `ModelFile.searchDirectories`).
     func installedFile() -> URL? {
-        let url = Self.modelsDirectory().appendingPathComponent(modelFile.fileName)
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
-              (attributes[.size] as? NSNumber)?.int64Value == modelFile.byteSize
-        else { return nil }
-        return url
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        return modelFile.searchDirectories(applicationSupport: appSupport).lazy
+            .map { $0.appendingPathComponent(self.modelFile.fileName) }
+            .first { url in
+                let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+                return (attributes?[.size] as? NSNumber)?.int64Value == self.modelFile.byteSize
+            }
     }
 
     /// Re-derives `phase` from the disk (e.g. the user deleted the file).

@@ -39,7 +39,7 @@ if [[ "$SIGNATURE" == *"TeamIdentifier="* && "$SIGNATURE" != *"TeamIdentifier=no
     echo "==> Notarizing (this usually takes a few minutes)…"
     zip_app
     OUT=$(xcrun notarytool submit "$ZIP" --keychain-profile "$NOTARY_PROFILE" --wait 2>&1) || true
-    echo "$OUT" | grep -E "id:|status:" | tail -2
+    echo "$OUT" | grep -E "id:|status:" | tail -2 || true   # no match must not end the script under pipefail
     if [[ "$OUT" != *"status: Accepted"* ]]; then
         ID=$(echo "$OUT" | awk '/^  id:/ {print $2; exit}')
         echo "==> Apple rejected the app. Its log:" >&2
